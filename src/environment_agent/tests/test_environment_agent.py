@@ -98,15 +98,47 @@ class EnvironmentAgentTickTests(unittest.TestCase):
     that any particular weather or traveler was chosen.
     """
 
-    def test_zero_traveler_chance_never_spawns_anyone(self):
-        env = EnvironmentAgent(traveler_chance=0.0, seed=1)
-        for _ in range(50):
+    def test_zero_travelers_per_day_never_spawns_anyone(self):
+        env = EnvironmentAgent(travelers_per_day=(0, 0), minutes_per_tick=60, seed=1)
+        for _ in range(24 * 5):  # five full days
             self.assertEqual(env.tick().travelers_arrived, [])
 
-    def test_certain_traveler_chance_always_spawns_exactly_one(self):
-        env = EnvironmentAgent(traveler_chance=1.0, seed=1)
-        for _ in range(20):
-            self.assertEqual(len(env.tick().travelers_arrived), 1)
+    def test_each_full_day_spawns_a_count_within_the_range(self):
+        # Start at midnight so every day is planned in full.
+        env = EnvironmentAgent(travelers_per_day=(3, 5), start_minute=0, minutes_per_tick=1, seed=4)
+        for _ in range(10):
+            arrived = sum(len(env.tick().travelers_arrived) for _ in range(1440))
+            self.assertGreaterEqual(arrived, 3)
+            self.assertLessEqual(arrived, 5)
+
+    def test_fixed_count_spawns_exactly_that_many_per_day(self):
+        env = EnvironmentAgent(travelers_per_day=(4, 4), start_minute=0, minutes_per_tick=1, seed=2)
+        for _ in range(5):
+            self.assertEqual(sum(len(env.tick().travelers_arrived) for _ in range(1440)), 4)
+
+    def test_arrivals_are_spread_across_the_day_not_all_at_once(self):
+        env = EnvironmentAgent(travelers_per_day=(6, 6), start_minute=0, minutes_per_tick=1, seed=9)
+        arrival_ticks = [i for i in range(1440) if env.tick().travelers_arrived]
+        self.assertGreater(len(arrival_ticks), 1)
+
+    def test_big_ticks_that_skip_whole_days_still_deliver_every_arrival(self):
+        env = EnvironmentAgent(travelers_per_day=(2, 2), start_minute=0, minutes_per_tick=1440 * 3, seed=3)
+        # One tick crosses three midnights: day 0's two arrivals plus days 1-2's.
+        self.assertEqual(len(env.tick().travelers_arrived), 6)
+
+    def test_starting_day_only_keeps_arrivals_after_the_start_time(self):
+        env = EnvironmentAgent(travelers_per_day=(10, 10), start_minute=23 * 60 + 59, seed=1)
+        # At 23:59 almost the whole day has passed, so nearly all are dropped.
+        self.assertLessEqual(len(env.planned_arrivals_today), 1)
+
+    def test_same_seed_plans_the_same_arrival_times(self):
+        a = EnvironmentAgent(seed=11, start_minute=0)
+        b = EnvironmentAgent(seed=11, start_minute=0)
+        self.assertEqual(a.planned_arrivals_today, b.planned_arrivals_today)
+
+    def test_invalid_travelers_per_day_is_rejected(self):
+        with self.assertRaises(ValueError):
+            EnvironmentAgent(travelers_per_day=(5, 2))
 
     def test_weather_changed_flag_matches_actual_transitions(self):
         env = EnvironmentAgent(seed=3)
@@ -167,19 +199,19 @@ class EnvironmentAgentTickTests(unittest.TestCase):
             self.assertEqual(event.temperature, initial_temperature)
 
     def test_weather_does_not_reroll_within_the_same_hour(self):
-        env = EnvironmentAgent(start_minute=0, minutes_per_tick=1, seed=7, traveler_chance=0)
+        env = EnvironmentAgent(start_minute=0, minutes_per_tick=1, seed=7, travelers_per_day=(0, 0))
         with mock.patch("environment_agent.agent.next_weather") as mocked_next_weather:
             env.tick()  # 00:00 -> 00:01, still hour 0
             mocked_next_weather.assert_not_called()
 
     def test_weather_rerolls_exactly_when_the_hour_changes(self):
-        env = EnvironmentAgent(start_minute=59, minutes_per_tick=1, seed=7, traveler_chance=0)
+        env = EnvironmentAgent(start_minute=59, minutes_per_tick=1, seed=7, travelers_per_day=(0, 0))
         with mock.patch("environment_agent.agent.next_weather", return_value=env.weather) as mocked_next_weather:
             env.tick()  # 00:59 -> 01:00, crosses into hour 1
             mocked_next_weather.assert_called_once()
 
     def test_weather_reroll_happens_once_even_if_a_tick_skips_multiple_hours(self):
-        env = EnvironmentAgent(start_minute=0, minutes_per_tick=180, seed=7, traveler_chance=0)  # 3 hours/tick
+        env = EnvironmentAgent(start_minute=0, minutes_per_tick=180, seed=7, travelers_per_day=(0, 0))  # 3 hours/tick
         with mock.patch("environment_agent.agent.next_weather", return_value=env.weather) as mocked_next_weather:
             env.tick()  # 00:00 -> 03:00, three hour boundaries crossed at once
             mocked_next_weather.assert_called_once()

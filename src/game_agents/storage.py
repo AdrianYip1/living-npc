@@ -4,9 +4,10 @@ import json
 from pathlib import Path
 
 from .identity import Identity
+from .inventory import Inventory
 from .memory import MemoryStore
 
-_IDENTITY_FIELDS = ("name", "traits", "backstory", "speech_style", "goals", "home", "workplace", "habits")
+_IDENTITY_FIELDS = ("name", "traits", "backstory", "speech_style", "goals", "home", "workplace", "habits", "starting_money", "starting_items")
 _COORD_FIELDS = ("home", "workplace")
 
 
@@ -88,3 +89,22 @@ def save_memory(name: str, store: MemoryStore, directory: str | Path) -> None:
         for m in store.all()
     ]
     (d / f"{name}.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
+
+
+def load_inventory(name: str, directory: str | Path) -> Inventory | None:
+    """The NPC's inventory as of the last save, or None if there isn't one
+    yet -- the caller then falls back to the identity's starting_money /
+    starting_items. Same one-file-per-NPC layout as load_memory().
+    """
+    path = Path(directory) / f"{name}.json"
+    if not path.exists():
+        return None
+    record = json.loads(path.read_text(encoding="utf-8"))
+    return Inventory(money=record["money"], items=record.get("items", {}))
+
+
+def save_inventory(name: str, inventory: Inventory, directory: str | Path) -> None:
+    d = Path(directory)
+    d.mkdir(parents=True, exist_ok=True)
+    record = {"money": inventory.money, "items": dict(sorted(inventory.items.items()))}
+    (d / f"{name}.json").write_text(json.dumps(record, indent=2), encoding="utf-8")

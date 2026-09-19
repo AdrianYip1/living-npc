@@ -25,7 +25,9 @@ class Identity:
     `home` and `workplace` are fixed map coordinates (see world.py for the
     map's bounds), not runtime state -- where an NPC currently stands is
     dynamic and lives on the Agent instead, starting at `home` and changing
-    as the move tool is used.
+    as the move tool is used. starting_money / starting_items follow the
+    same split: they only seed the Agent's Inventory (see inventory.py),
+    which is what actually changes as the NPC trades.
     """
 
     name: str
@@ -36,6 +38,8 @@ class Identity:
     home: tuple[int, int] = (0, 0)
     workplace: tuple[int, int] = (0, 0)
     habits: list[str] = field(default_factory=list)
+    starting_money: int = 0
+    starting_items: dict[str, int] = field(default_factory=dict)
 
     def prompt_block(self, template: str = DEFAULT_PROFILE_TEMPLATE) -> str:
         return template.format(

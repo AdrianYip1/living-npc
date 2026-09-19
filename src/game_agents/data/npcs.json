@@ -11,7 +11,9 @@
       "Leaves home for the forge shortly after sunrise",
       "Works at the forge most of the day",
       "Heads home once the light starts to fade"
-    ]
+    ],
+    "starting_money": 40,
+    "starting_items": {"iron ingot": 6, "horseshoe": 4, "hammer": 1}
   },
   {
     "name": "Finn",
@@ -25,6 +27,8 @@
       "Walks down to the docks early to catch the morning tide",
       "Lingers at the docks talking to whoever passes through",
       "Wanders back home in the evening, usually with a late catch"
-    ]
+    ],
+    "starting_money": 12,
+    "starting_items": {"fish": 5, "fishing rod": 1, "torn net": 1}
   }
 ]

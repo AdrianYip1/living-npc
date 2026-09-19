@@ -7,6 +7,14 @@
       "runtimeArgs": ["-m", "mini_map.game"],
       "cwd": "src",
       "port": 8765
+    },
+    {
+      "name": "mini-map-mock",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "mini_map.game"],
+      "cwd": "src",
+      "env": { "GAME_AGENTS_LLM": "mock" },
+      "port": 8765
     }
   ]
 }

@@ -43,8 +43,8 @@ def _registry(tmp, llm, *, names=("Mara", "Finn"), **kwargs) -> NPCRegistry:
 class RunForeverThreadingTests(unittest.TestCase):
     """run_forever() itself: confirms the environment and NPC-query loops
     are genuinely independent threads -- a slow/blocked NPC query must not
-    stall the environment clock, which is the whole reason tick_interval_s
-    and npc_query_interval_s were split out of one shared loop.
+    stall the environment clock, which is the whole reason ticks_per_real_
+    minute and llm_calls_per_game_hour are paced on separate loops.
     """
 
     def test_environment_loop_keeps_advancing_while_npc_query_is_blocked(self):
@@ -68,21 +68,67 @@ class RunForeverThreadingTests(unittest.TestCase):
                 release_npc_query.wait(timeout=2)
                 return real_query_npcs(self)
 
-            sim = Simulation(registry, environment, tick_interval_s=0.02, npc_query_interval_s=100)
+            # ticks_per_real_minute=3000 -> tick_interval_s=0.02.
+            # llm_calls_per_game_hour=0.01 -> npc_query_interval_s=120, i.e.
+            # the query loop's first (blocked) call never returns in this
+            # test's short window.
+            sim = Simulation(registry, environment, ticks_per_real_minute=3000, llm_calls_per_game_hour=0.01)
             with mock.patch.object(Simulation, "_query_npcs", blocking_query_npcs):
                 thread = threading.Thread(target=sim.run_forever, daemon=True)
                 thread.start()
                 try:
-                    # npc_query_interval_s=100 means the query loop's first
-                    # (blocked) call never returns in this window -- the env
-                    # loop ticking many times at 0.02s anyway is what proves
-                    # the two loops are independent, not serialized.
+                    # The env loop ticking many times while the query loop's
+                    # blocked call never returns is what proves the two
+                    # loops are independent, not serialized.
                     time.sleep(0.3)
                     self.assertGreater(len(tick_calls), 3)
                 finally:
                     release_npc_query.set()
                     sim.stop()
                     thread.join(timeout=2)
+
+
+class TravelerArrivalTests(unittest.TestCase):
+    """The page spawns travelers only from state()'s traveler_arrivals, so
+    every arrival the environment agent reports has to land there once,
+    with a unique, increasing id.
+    """
+
+    def test_every_environment_arrival_shows_up_in_state_with_increasing_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, MockLLMClient())
+            environment = EnvironmentAgent(travelers_per_day=(3, 3), start_minute=0, seed=1)
+            sim = Simulation(registry, environment)
+
+            for _ in range(1440):  # one full in-game day at 1 min/tick
+                sim._advance_environment()
+
+            arrivals = sim.state()["traveler_arrivals"]
+            self.assertEqual([a["id"] for a in arrivals], [1, 2, 3])
+            for arrival in arrivals:
+                self.assertTrue(arrival["name"])
+                self.assertRegex(arrival["arrived_at"], r"^\d\d:\d\d$")
+
+    def test_no_arrivals_when_the_environment_sends_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, MockLLMClient())
+            sim = Simulation(registry, EnvironmentAgent(travelers_per_day=(0, 0), seed=1))
+            for _ in range(100):
+                sim._advance_environment()
+            self.assertEqual(sim.state()["traveler_arrivals"], [])
+
+    def test_only_the_most_recent_arrivals_are_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, MockLLMClient())
+            # 1440 min/tick -> 10 arrivals per tick, all in one beat.
+            environment = EnvironmentAgent(travelers_per_day=(10, 10), start_minute=0, minutes_per_tick=1440, seed=1)
+            sim = Simulation(registry, environment)
+            for _ in range(5):
+                sim._advance_environment()
+
+            ids = [a["id"] for a in sim.state()["traveler_arrivals"]]
+            self.assertEqual(len(ids), Simulation.RECENT_TRAVELERS)
+            self.assertEqual(ids[-1], 50)
 
 
 class SimulationPauseTests(unittest.TestCase):
@@ -117,7 +163,10 @@ class SimulationPauseTests(unittest.TestCase):
             registry = _registry(tmp, MockLLMClient())
             environment = EnvironmentAgent(seed=1)
             initial_minute = environment.minute_of_day
-            sim = Simulation(registry, environment, tick_interval_s=0.02, npc_query_interval_s=0.02)
+            # ticks_per_real_minute=3000 -> tick_interval_s=0.02;
+            # llm_calls_per_game_hour=60 -> npc_query_interval_s=0.02 too
+            # (both fast, for a short test).
+            sim = Simulation(registry, environment, ticks_per_real_minute=3000, llm_calls_per_game_hour=60)
             sim.pause()  # paused before the loops get a chance to run at all
 
             thread = threading.Thread(target=sim.run_forever, daemon=True)
@@ -135,7 +184,7 @@ class SimulationPauseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             registry = _registry(tmp, MockLLMClient())
             environment = EnvironmentAgent(seed=1)
-            sim = Simulation(registry, environment, tick_interval_s=0.02, npc_query_interval_s=0.02)
+            sim = Simulation(registry, environment, ticks_per_real_minute=3000, llm_calls_per_game_hour=60)
             sim.pause()
 
             thread = threading.Thread(target=sim.run_forever, daemon=True)
@@ -186,6 +235,20 @@ class SimulationTickTests(unittest.TestCase):
             # Finn (who always just speaks) would pick up a second memory.
             self.assertEqual(len(registry.get("Finn").memory.all()), 1)
 
+    def test_refused_conversation_leaves_the_target_free_to_act(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, _NameAwareLLM(), conversation_turns=2)
+            registry.get("Finn").position = (50, 50)  # out of Mara's range
+            sim = Simulation(registry, EnvironmentAgent(seed=1))
+
+            sim.tick()
+
+            # No conversation happened, so Finn still gets his own turn
+            # (one memory, from speaking) instead of a bogus "talked with Mara".
+            self.assertEqual(len(registry.get("Finn").memory.all()), 1)
+            finn_state = next(n for n in sim.state()["npcs"] if n["name"] == "Finn")
+            self.assertEqual(finn_state["activity"], "said: hello")
+
     def test_state_reports_time_of_day_weather_and_positions(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = _registry(tmp, MockLLMClient(), names=("Mara",))
@@ -203,38 +266,50 @@ class SimulationTickTests(unittest.TestCase):
             self.assertFalse(npc["busy"])
             self.assertTrue(npc["activity"])
 
-    def test_state_reports_the_configured_intervals(self):
+    def test_state_reports_the_configured_rates(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = _registry(tmp, MockLLMClient())
-            sim = Simulation(registry, EnvironmentAgent(seed=1), tick_interval_s=2.5, npc_query_interval_s=30.0)
+            # minutes_per_tick=1 (default) x ticks_per_real_minute=30 -> 30
+            # game-minutes/real-minute is what should actually be reported.
+            sim = Simulation(
+                registry, EnvironmentAgent(seed=1), ticks_per_real_minute=30.0, llm_calls_per_game_hour=6.0
+            )
 
             state = sim.state()
 
-            self.assertEqual(state["tick_interval_s"], 2.5)
-            self.assertEqual(state["npc_query_interval_s"], 30.0)
+            self.assertEqual(state["game_minutes_per_real_minute"], 30.0)
+            self.assertEqual(state["llm_calls_per_game_hour"], 6.0)
 
-    def test_state_reports_queries_per_game_minute(self):
+    def test_game_minutes_per_real_minute_accounts_for_minutes_per_tick(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = _registry(tmp, MockLLMClient())
-            # 1 real second/tick, 1 game-minute/tick (default) -> 1 game-min
-            # passes per real second. Querying every 15 real seconds is
-            # then one round per 15 game-minutes, i.e. 1/15 per game-minute.
+            environment = EnvironmentAgent(seed=1, minutes_per_tick=3)
+            sim = Simulation(registry, environment, ticks_per_real_minute=10.0, llm_calls_per_game_hour=4.0)
+
+            self.assertEqual(sim.state()["game_minutes_per_real_minute"], 30.0)
+
+    def test_state_reports_llm_calls_per_real_minute(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, MockLLMClient())
+            # minutes_per_tick=1 (default) x ticks_per_real_minute=60 -> 60
+            # game-minutes per real-minute, i.e. exactly 1 game-hour per
+            # real-minute. At 4 calls/game-hour, that's 4 calls/real-minute.
             environment = EnvironmentAgent(seed=1, minutes_per_tick=1)
-            sim = Simulation(registry, environment, tick_interval_s=1.0, npc_query_interval_s=15.0)
+            sim = Simulation(registry, environment, ticks_per_real_minute=60.0, llm_calls_per_game_hour=4.0)
 
-            self.assertAlmostEqual(sim.state()["queries_per_game_minute"], 1 / 15)
+            self.assertAlmostEqual(sim.state()["llm_calls_per_real_minute"], 4.0)
 
-    def test_queries_per_game_minute_accounts_for_minutes_per_tick(self):
+    def test_llm_calls_per_real_minute_accounts_for_minutes_per_tick(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = _registry(tmp, MockLLMClient())
-            # Same real-time rates as above, but each tick now covers 2
-            # game-minutes instead of 1 -- game-time passes twice as fast
-            # per real second, so the same query cadence covers twice the
-            # in-game ground: half as many queries per game-minute.
+            # Same rates as above, but each tick now covers 2 game-minutes
+            # instead of 1 -- game-time passes twice as fast per real
+            # minute, so the same game-hour query rate now covers twice the
+            # real-time ground: twice as many calls per real-minute.
             environment = EnvironmentAgent(seed=1, minutes_per_tick=2)
-            sim = Simulation(registry, environment, tick_interval_s=1.0, npc_query_interval_s=15.0)
+            sim = Simulation(registry, environment, ticks_per_real_minute=60.0, llm_calls_per_game_hour=4.0)
 
-            self.assertAlmostEqual(sim.state()["queries_per_game_minute"], 1 / 30)
+            self.assertAlmostEqual(sim.state()["llm_calls_per_real_minute"], 8.0)
 
     def test_state_before_any_tick_still_reports_every_npc(self):
         with tempfile.TemporaryDirectory() as tmp:

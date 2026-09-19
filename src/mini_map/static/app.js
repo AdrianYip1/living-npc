@@ -1,7 +1,7 @@
 // The scrolling grid and player dot are still a local placeholder -- WASD/
 // arrow keys drive the player directly, and will be replaced once a real
-// player position comes from the backend. Mic-hold and the conversation
-// log's typing/rendering are likewise still local-only.
+// player position comes from the backend. The conversation log's
+// typing/rendering is likewise still local-only.
 //
 // NPCs, though, are real: their positions come from polling /api/state on
 // the mini_map server, which runs game_agents' NPCRegistry behind an
@@ -13,14 +13,16 @@
 // Play/pause is real too: it POSTs to /api/pause and /api/resume, which
 // actually stop/resume the server's world tick loop (environment clock +
 // NPC LLM queries), not just a client-side dim. state.paused also gates
-// player movement and traveler spawning locally, and gets resynced from
-// the server's own `paused` flag on every /api/state poll.
+// player movement locally, and gets resynced from the server's own
+// `paused` flag on every /api/state poll.
 //
-// Travelers are still a separate, client-only placeholder category: one
-// drifts in from a random map edge every so often, fades in, walks a
+// Travelers are decided by the environment agent (how many per in-game
+// day, and when -- see environment_agent/agent.py) and show up in
+// /api/state's traveler_arrivals, each with an id. The page spawns each
+// new id once: it drifts in from a random map edge, fades in, walks a
 // straight placeholder line across the map, and is removed the moment it
-// crosses back outside the map bounds. Spawning real travelers from the
-// environment agent is a natural next step, not done yet.
+// crosses back outside the map bounds. That walk is still client-only --
+// the server doesn't track where a traveler is.
 
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
@@ -34,23 +36,21 @@ const MAX_SPEED = 260; // world px/sec
 const ACCEL = 900; // px/sec^2 while a move key is held
 const DECEL = 1400; // px/sec^2 once keys are released
 const NPC_COLORS = ["#e91e63", "#2196f3", "#ff9800", "#9c27b0", "#00bcd4"];
-const TRAVELER_NAMES = ["Doran", "Kestrel", "Wren", "Fennic", "Ilsa", "Orin"];
 const TRAVELER_SPEED = 70; // world units/sec
 const TRAVELER_FADE_SECONDS = 1.2;
-const TRAVELER_SPAWN_MIN_MS = 6000;
-const TRAVELER_SPAWN_MAX_MS = 14000;
-const MAX_TRAVELERS = 3;
 const GAME_BOUND = 100; // matches game_agents/world.py's MAP_MIN/MAX
 const WORLD_SCALE = MAP_HALF / GAME_BOUND; // backend coord -> canvas world unit
-const STATE_POLL_MS = 2000;
+const STATE_POLL_MS = 200;
+// Client-side smoothing of server-driven NPC positions (see applyState).
+const NPC_SNAP_DISTANCE = 60; // world units; bigger gaps than this just jump
+const NPC_CORRECTION_RATE = 8; // per sec; how fast drift from the server is bled off
 
 const statusTime = document.getElementById("status-time");
 const statusWeather = document.getElementById("status-weather");
-const statusTickInterval = document.getElementById("status-tick-interval");
-const statusNpcQueryInterval = document.getElementById("status-npc-query-interval");
-const statusQueriesPerMinute = document.getElementById("status-queries-per-minute");
+const statusGameMinutesPerRealMinute = document.getElementById("status-game-minutes-per-real-minute");
+const statusLlmCallsPerGameHour = document.getElementById("status-llm-calls-per-game-hour");
+const statusLlmCallsPerRealMinute = document.getElementById("status-llm-calls-per-real-minute");
 const statusPlaystate = document.getElementById("status-playstate");
-const statusMic = document.getElementById("status-mic");
 const conversationEl = document.getElementById("conversation");
 const conversationTarget = document.getElementById("conversation-target");
 const conversationInput = document.getElementById("conversation-input");
@@ -60,7 +60,6 @@ const proximityHint = document.getElementById("proximity-hint");
 
 const state = {
   paused: true,
-  micActive: false,
   conversationOpen: false,
 };
 
@@ -103,18 +102,21 @@ function applyState(data) {
   if (typeof data.weather === "string") {
     statusWeather.textContent = data.weather;
   }
-  // These two are launch-time constants (--tick-interval /
-  // --npc-query-interval), but reading them off the server's own state
-  // rather than hardcoding them keeps this display honest if the backend
-  // was started with non-default values.
-  if (typeof data.tick_interval_s === "number") {
-    statusTickInterval.textContent = `${data.tick_interval_s}s`;
+  // The first (game_minutes_per_real_minute, derived server-side from
+  // --ticks-per-real-minute and EnvironmentAgent's minutes_per_tick) and
+  // second (llm_calls_per_game_hour, a launch-time constant) come off the
+  // server's own state rather than being hardcoded, so this stays honest
+  // if the backend was started with non-default values. The third is
+  // derived server-side from the other two (see
+  // Simulation._llm_calls_per_real_minute).
+  if (typeof data.game_minutes_per_real_minute === "number") {
+    statusGameMinutesPerRealMinute.textContent = data.game_minutes_per_real_minute.toFixed(2).replace(/\.00$/, "");
   }
-  if (typeof data.npc_query_interval_s === "number") {
-    statusNpcQueryInterval.textContent = `${data.npc_query_interval_s}s`;
+  if (typeof data.llm_calls_per_game_hour === "number") {
+    statusLlmCallsPerGameHour.textContent = data.llm_calls_per_game_hour.toFixed(2).replace(/\.00$/, "");
   }
-  if (typeof data.queries_per_game_minute === "number") {
-    statusQueriesPerMinute.textContent = data.queries_per_game_minute.toFixed(2);
+  if (typeof data.llm_calls_per_real_minute === "number") {
+    statusLlmCallsPerRealMinute.textContent = data.llm_calls_per_real_minute.toFixed(2).replace(/\.00$/, "");
   }
   if (typeof data.paused === "boolean") {
     // Server-authoritative sync, not a user action -- updates the label/
@@ -126,9 +128,28 @@ function applyState(data) {
   npcs.length = 0;
   for (const entry of data.npcs || []) {
     const existing = byName.get(entry.name);
-    const npc = existing || { name: entry.name, color: colorFor(entry.name) };
-    npc.x = entry.x * WORLD_SCALE;
-    npc.y = entry.y * WORLD_SCALE;
+    const npc = existing || { name: entry.name, color: colorFor(entry.name), errX: 0, errY: 0 };
+    const serverX = entry.x * WORLD_SCALE;
+    const serverY = entry.y * WORLD_SCALE;
+    // The server owns where NPCs actually are (see NPCRegistry.
+    // step_movement); updateNpcs() re-runs the same walking physics every
+    // frame so motion stays smooth between polls, and any drift from the
+    // server's position gets bled off over the next few frames instead of
+    // snapping -- unless it's too big to be drift (first sighting, etc.).
+    if (existing && Math.hypot(serverX - npc.x, serverY - npc.y) < NPC_SNAP_DISTANCE) {
+      npc.errX = serverX - npc.x;
+      npc.errY = serverY - npc.y;
+    } else {
+      npc.x = serverX;
+      npc.y = serverY;
+      npc.errX = 0;
+      npc.errY = 0;
+    }
+    npc.vx = (entry.vx || 0) * WORLD_SCALE;
+    npc.vy = (entry.vy || 0) * WORLD_SCALE;
+    npc.destination = Array.isArray(entry.destination)
+      ? { x: entry.destination[0] * WORLD_SCALE, y: entry.destination[1] * WORLD_SCALE }
+      : null;
     npc.busy = entry.busy;
     npc.activity = entry.activity;
     npcs.push(npc);
@@ -137,6 +158,28 @@ function applyState(data) {
   if (nearbyNPC && !npcs.includes(nearbyNPC)) {
     nearbyNPC = null;
   }
+
+  spawnNewTravelers(data.traveler_arrivals || []);
+}
+
+// Highest traveler_arrivals id already handled. null until the first poll,
+// which only records where the list stands -- otherwise a page reload
+// would re-spawn every recent arrival at once.
+let lastTravelerId = null;
+
+function spawnNewTravelers(arrivals) {
+  const maxId = arrivals.reduce((max, arrival) => Math.max(max, arrival.id), 0);
+  if (lastTravelerId === null) {
+    lastTravelerId = maxId;
+    return;
+  }
+  for (const arrival of arrivals) {
+    if (arrival.id > lastTravelerId) {
+      spawnTraveler(arrival);
+      appendLogLine(`A traveler arrives at ${arrival.arrived_at}: ${arrival.name}, ${arrival.origin}, ${arrival.reason}.`, { system: true });
+    }
+  }
+  lastTravelerId = Math.max(lastTravelerId, maxId);
 }
 
 let statePollFailed = false;
@@ -161,11 +204,7 @@ async function pollState() {
 // Mutated in place by spawnTraveler() (push) and tick() (splice on exit).
 const travelers = [];
 
-function spawnTraveler() {
-  if (state.paused || travelers.length >= MAX_TRAVELERS) {
-    return;
-  }
-
+function spawnTraveler(arrival) {
   const edge = Math.floor(Math.random() * 4);
   const along = (Math.random() * 2 - 1) * (MAP_HALF - 20);
   const inset = MAP_HALF - 4;
@@ -195,12 +234,12 @@ function spawnTraveler() {
   const angle = inwardAngle + (Math.random() * (Math.PI / 3) - Math.PI / 6);
   const speed = TRAVELER_SPEED * (0.8 + Math.random() * 0.4);
 
-  const taken = new Set(npcs.concat(travelers).map((entity) => entity.name));
-  const available = TRAVELER_NAMES.filter((name) => !taken.has(name));
-  const pool = available.length > 0 ? available : TRAVELER_NAMES;
-
   travelers.push({
-    name: pool[Math.floor(Math.random() * pool.length)],
+    id: arrival.id,
+    name: arrival.name,
+    origin: arrival.origin,
+    reason: arrival.reason,
+    traits: arrival.traits,
     color: NPC_COLORS[Math.floor(Math.random() * NPC_COLORS.length)],
     isTraveler: true, // no backend counterpart -- conversation panel stays local-only for these
     x,
@@ -209,14 +248,6 @@ function spawnTraveler() {
     vy: Math.sin(angle) * speed,
     opacity: 0,
   });
-}
-
-function scheduleNextTraveler() {
-  const delay = TRAVELER_SPAWN_MIN_MS + Math.random() * (TRAVELER_SPAWN_MAX_MS - TRAVELER_SPAWN_MIN_MS);
-  setTimeout(() => {
-    spawnTraveler();
-    scheduleNextTraveler();
-  }, delay);
 }
 
 const pressedKeys = new Set();
@@ -424,12 +455,65 @@ function tick(now) {
       velocity.y = 0;
     }
 
+    updateNpcs(dt);
     updateTravelers(dt);
   }
 
   updateNearbyNPC();
   drawWorld();
   requestAnimationFrame(tick);
+}
+
+// JS twin of game_agents/world.py's step_toward(), in canvas units: walk
+// toward `destination` (or brake to a stop if null) with the player's own
+// MAX_SPEED / ACCEL / DECEL, braking early enough to stop on the spot.
+function stepToward(body, destination, dt) {
+  const speed = Math.hypot(body.vx, body.vy);
+
+  if (!destination) {
+    if (speed > 0) {
+      const scale = Math.max(0, speed - DECEL * dt) / speed;
+      body.vx *= scale;
+      body.vy *= scale;
+    }
+  } else {
+    const toX = destination.x - body.x;
+    const toY = destination.y - body.y;
+    const dist = Math.hypot(toX, toY);
+    if (dist <= Math.max(speed * dt, 1e-6)) {
+      body.x = destination.x;
+      body.y = destination.y;
+      body.vx = 0;
+      body.vy = 0;
+      return;
+    }
+
+    const desiredSpeed = Math.min(MAX_SPEED, Math.sqrt(2 * DECEL * dist));
+    let dvx = (toX / dist) * desiredSpeed - body.vx;
+    let dvy = (toY / dist) * desiredSpeed - body.vy;
+    const dv = Math.hypot(dvx, dvy);
+    const maxDv = (desiredSpeed < speed ? DECEL : ACCEL) * dt;
+    if (dv > maxDv) {
+      dvx = (dvx / dv) * maxDv;
+      dvy = (dvy / dv) * maxDv;
+    }
+    body.vx += dvx;
+    body.vy += dvy;
+  }
+
+  body.x += body.vx * dt;
+  body.y += body.vy * dt;
+}
+
+function updateNpcs(dt) {
+  const k = Math.min(1, NPC_CORRECTION_RATE * dt);
+  for (const npc of npcs) {
+    stepToward(npc, npc.busy ? null : npc.destination, dt);
+    npc.x += npc.errX * k;
+    npc.y += npc.errY * k;
+    npc.errX -= npc.errX * k;
+    npc.errY -= npc.errY * k;
+  }
 }
 
 function updateTravelers(dt) {
@@ -482,12 +566,6 @@ async function setPaused(paused) {
   } catch (err) {
     // best effort -- the next state poll resyncs from server truth anyway
   }
-}
-
-function setMicActive(active) {
-  state.micActive = active;
-  statusMic.textContent = active ? "Listening..." : "Off";
-  statusMic.classList.toggle("active", active);
 }
 
 function appendLogLine(text, { system = false } = {}) {
@@ -586,12 +664,6 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
-  if (event.code === "Tab" && !state.micActive) {
-    event.preventDefault();
-    setMicActive(true);
-    return;
-  }
-
   if (event.code === "KeyE") {
     event.preventDefault();
     if (state.conversationOpen) {
@@ -609,15 +681,11 @@ document.addEventListener("keydown", (event) => {
 });
 
 document.addEventListener("keyup", (event) => {
-  if (event.code === "Tab") {
-    setMicActive(false);
-  }
   pressedKeys.delete(event.code);
 });
 
 window.addEventListener("blur", () => {
   pressedKeys.clear();
-  setMicActive(false);
 });
 
 function resizeConversationInput() {
@@ -673,6 +741,5 @@ conversationForm.addEventListener("submit", async (event) => {
 appendLogLine("Connecting to the living-npc backend...", { system: true });
 resizeCanvas();
 requestAnimationFrame(tick);
-scheduleNextTraveler();
 pollState();
 setInterval(pollState, STATE_POLL_MS);

@@ -9,11 +9,10 @@ needs to be run as a package, not `python game.py` directly, since it
 imports sibling packages (game_agents, environment_agent) that only
 resolve once src/ is on sys.path, whether via cwd or the editable install.
 
-Two tunables, both real-time seconds, independently overridable with
---tick-interval / --npc-query-interval (see Simulation for what each one
+Two tunables, independently overridable (see Simulation for what each one
 actually paces):
 
-    python -m mini_map.game --tick-interval 5 --npc-query-interval 30
+    python -m mini_map.game --ticks-per-real-minute 30 --llm-calls-per-game-hour 6
 """
 from __future__ import annotations
 
@@ -34,12 +33,14 @@ from .simulation import Simulation
 STATIC_DIR = Path(__file__).parent / "static"
 HOST = "127.0.0.1"
 PORT = 8765
-# 1s ticks x 1 game-minute/tick (EnvironmentAgent's own default) = 1 game-
-# minute per real second, i.e. a full in-game day in 24 real minutes --
-# matches the pace from before the clock became smooth (which was 15
+# 60 ticks/real-min x 1 game-minute/tick (EnvironmentAgent's own default) =
+# 1 game-minute per real second, i.e. a full in-game day in 24 real minutes
+# -- matches the pace from before the clock became smooth (which was 15
 # game-minutes every 15s: the same 1-minute-per-second rate, just chunkier).
-TICK_INTERVAL_S = 1.0
-NPC_QUERY_INTERVAL_S = 15.0
+TICKS_PER_REAL_MINUTE = 60.0
+# 4 calls/game-hr x 1 game-hr/real-min (at the default tick rate above) = 4
+# calls/real-min, i.e. one query round every 15s -- matches the old default.
+LLM_CALLS_PER_GAME_HOUR = 4.0
 
 # Set by run() before the server starts; the handler reads it per-request.
 # A single-process script gets to have one simulation as shared state
@@ -130,8 +131,8 @@ def run(
     port: int = PORT,
     *,
     open_browser: bool = True,
-    tick_interval_s: float = TICK_INTERVAL_S,
-    npc_query_interval_s: float = NPC_QUERY_INTERVAL_S,
+    ticks_per_real_minute: float = TICKS_PER_REAL_MINUTE,
+    llm_calls_per_game_hour: float = LLM_CALLS_PER_GAME_HOUR,
 ) -> None:
     global _simulation
 
@@ -140,8 +141,8 @@ def run(
     _simulation = Simulation(
         registry,
         environment,
-        tick_interval_s=tick_interval_s,
-        npc_query_interval_s=npc_query_interval_s,
+        ticks_per_real_minute=ticks_per_real_minute,
+        llm_calls_per_game_hour=llm_calls_per_game_hour,
     )
     # The UI's status panel starts on "Paused" -- match that on the server
     # so the world genuinely doesn't move until the player presses play,
@@ -153,9 +154,10 @@ def run(
 
     server = ThreadingHTTPServer((host, port), Handler)
     url = f"http://{host}:{port}"
+    game_minutes_per_real_minute = ticks_per_real_minute * environment.minutes_per_tick
     print(
-        f"mini-map UI running at {url} ({backend} backend, in-game tick every {tick_interval_s:.0f}s, "
-        f"NPCs queried every {npc_query_interval_s:.0f}s). Ctrl+C to stop"
+        f"mini-map UI running at {url} ({backend} backend, {game_minutes_per_real_minute:g} game-min/real-min, "
+        f"{llm_calls_per_game_hour:g} LLM calls/game-hr). Ctrl+C to stop"
     )
     if open_browser:
         webbrowser.open(url)
@@ -182,20 +184,23 @@ def run(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch the living-npc mini-map.")
     parser.add_argument(
-        "--tick-interval",
+        "--ticks-per-real-minute",
         type=float,
-        default=TICK_INTERVAL_S,
-        metavar="SECONDS",
-        help=f"Real seconds per in-game tick (day-phase/weather advance). Default: {TICK_INTERVAL_S:g}",
+        default=TICKS_PER_REAL_MINUTE,
+        metavar="COUNT",
+        help=(
+            "How many in-game ticks (day-phase/weather advances) happen per real minute -- "
+            f"controls how fast the clock runs. Default: {TICKS_PER_REAL_MINUTE:g}"
+        ),
     )
     parser.add_argument(
-        "--npc-query-interval",
+        "--llm-calls-per-game-hour",
         type=float,
-        default=NPC_QUERY_INTERVAL_S,
-        metavar="SECONDS",
+        default=LLM_CALLS_PER_GAME_HOUR,
+        metavar="COUNT",
         help=(
-            "Real seconds between rounds of querying every idle NPC's LLM. "
-            f"Default: {NPC_QUERY_INTERVAL_S:g}"
+            "How many times each idle NPC gets queried per in-game hour, regardless of how "
+            f"fast the clock itself is ticking. Default: {LLM_CALLS_PER_GAME_HOUR:g}"
         ),
     )
     return parser.parse_args()
@@ -203,4 +208,4 @@ def _parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = _parse_args()
-    run(tick_interval_s=args.tick_interval, npc_query_interval_s=args.npc_query_interval)
+    run(ticks_per_real_minute=args.ticks_per_real_minute, llm_calls_per_game_hour=args.llm_calls_per_game_hour)

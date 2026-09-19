@@ -93,10 +93,6 @@ body {
   text-decoration: underline;
 }
 
-#status-mic.active {
-  color: #4caf50;
-}
-
 .hidden {
   display: none !important;
 }

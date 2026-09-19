@@ -32,8 +32,8 @@ class EnvironmentAgent:
     idle behavior on a tick, not the other way around.
 
     Everything in this class is currently deterministic (a weighted random
-    weather roll, a flat spawn-chance coin flip, name-pool sampling for
-    travelers) -- NOT an LLM call. This is a placeholder for a real build:
+    weather roll, a per-day traveler count and arrival times, name-pool
+    sampling for travelers) -- NOT an LLM call. This is a placeholder for a real build:
     tick() already has the shape an LLM turn would have (current state in,
     one decision out, no memory of "what's next"), so swapping the
     deterministic internals for an LLM call later shouldn't change how
@@ -55,12 +55,21 @@ class EnvironmentAgent:
     clock, and ticks can fire as fast as tick_interval_s allows; weather
     changing at that same pace would make it flicker unrealistically fast
     regardless of how those two are tuned.
+
+    Travelers are the other exception: at the start of each in-game day
+    (and on construction, for whatever's left of the starting day) the
+    agent rolls how many travelers will come that day, somewhere in
+    travelers_per_day, and a random minute for each -- see _plan_day().
+    tick() then just releases whichever planned arrivals its time step
+    passed. Who each traveler is still gets invented at arrival, not at
+    planning time.
     """
 
     def __init__(
         self,
         weather: Weather = Weather.CLEAR,
-        traveler_chance: float = 0.15,
+        # Inclusive (min, max) arrivals per in-game day.
+        travelers_per_day: tuple[int, int] = (2, 6),
         start_minute: int = 8 * 60,  # 08:00 -- lands in morning by default
         # 1 minute -- the finest step format_clock() can even show, so the
         # clock always counts up smoothly. How fast that happens in real
@@ -69,13 +78,41 @@ class EnvironmentAgent:
         minutes_per_tick: int = 1,
         seed: int | None = None,
     ) -> None:
+        low, high = travelers_per_day
+        if not 0 <= low <= high:
+            raise ValueError(f"travelers_per_day must satisfy 0 <= min <= max, got {travelers_per_day}")
         self.weather = weather
-        self.traveler_chance = traveler_chance
+        self.travelers_per_day = travelers_per_day
         self.minute_of_day = start_minute % MINUTES_PER_DAY
         self.minutes_per_tick = minutes_per_tick
         self._rng = random.Random(seed)
         self.temperature = next_temperature(self.time_of_day, self.weather, self._rng)
         self._last_weather_hour = self.minute_of_day // 60
+
+        # Game-minutes elapsed since midnight of day 0 -- unlike
+        # minute_of_day it never wraps, so planned arrivals from different
+        # days can share one sorted list.
+        self._elapsed_minutes = self.minute_of_day
+        self._planned_through_day = 0
+        self._planned_arrivals: list[int] = self._plan_day(0, after=self._elapsed_minutes)
+
+    def _plan_day(self, day: int, after: int = -1) -> list[int]:
+        """Rolls day `day`'s traveler count and arrival minutes, as absolute
+        elapsed-minute values. Arrivals at or before `after` are dropped --
+        used for the starting day, whose earlier hours already "happened".
+        """
+        count = self._rng.randint(*self.travelers_per_day)
+        day_start = day * MINUTES_PER_DAY
+        times = sorted(day_start + self._rng.randrange(MINUTES_PER_DAY) for _ in range(count))
+        return [t for t in times if t > after]
+
+    @property
+    def planned_arrivals_today(self) -> list[str]:
+        """Clock times ("HH:MM") of arrivals still to come today -- for
+        debugging/inspection only; callers shouldn't plan around it.
+        """
+        day_end = (self._elapsed_minutes // MINUTES_PER_DAY + 1) * MINUTES_PER_DAY
+        return [format_clock(t) for t in self._planned_arrivals if t < day_end]
 
     @property
     def time_of_day(self) -> TimeOfDay:
@@ -86,7 +123,8 @@ class EnvironmentAgent:
         return format_clock(self.minute_of_day)
 
     def tick(self) -> EnvironmentEvent:
-        self.minute_of_day = (self.minute_of_day + self.minutes_per_tick) % MINUTES_PER_DAY
+        self._elapsed_minutes += self.minutes_per_tick
+        self.minute_of_day = self._elapsed_minutes % MINUTES_PER_DAY
         current_hour = self.minute_of_day // 60
 
         changed = False
@@ -97,9 +135,17 @@ class EnvironmentAgent:
             self.weather = new_weather
             self.temperature = next_temperature(self.time_of_day, self.weather, self._rng)
 
-        travelers_arrived = []
-        if self._rng.random() < self.traveler_chance:
-            travelers_arrived.append(invent_traveler(self._rng))
+        # A loop, not an if: one big tick can cross several midnights.
+        current_day = self._elapsed_minutes // MINUTES_PER_DAY
+        while self._planned_through_day < current_day:
+            self._planned_through_day += 1
+            self._planned_arrivals.extend(self._plan_day(self._planned_through_day))
+
+        due = 0
+        while due < len(self._planned_arrivals) and self._planned_arrivals[due] <= self._elapsed_minutes:
+            due += 1
+        del self._planned_arrivals[:due]
+        travelers_arrived = [invent_traveler(self._rng) for _ in range(due)]
 
         return EnvironmentEvent(
             weather=self.weather,

@@ -17,22 +17,19 @@
       <span id="status-weather" class="value">--</span>
     </div>
     <div class="status-row status-row--labeled">
-      <span class="label" title="Real seconds per in-game tick -- how often the clock/weather advance">World tick</span>
-      <span id="status-tick-interval" class="value">--</span>
+      <span class="label" title="How many in-game minutes pass per real minute -- controls how fast the clock runs">Game-min/real-min</span>
+      <span id="status-game-minutes-per-real-minute" class="value">--</span>
     </div>
     <div class="status-row status-row--labeled">
-      <span class="label" title="Real seconds between rounds of querying every idle NPC's LLM">NPC query</span>
-      <span id="status-npc-query-interval" class="value">--</span>
+      <span class="label" title="How many times each idle NPC gets queried per in-game hour, regardless of clock speed">LLM calls/game-hr</span>
+      <span id="status-llm-calls-per-game-hour" class="value">--</span>
     </div>
     <div class="status-row status-row--labeled">
-      <span class="label" title="NPC query rounds per in-game minute, derived from World tick and NPC query above">Queries/game-min</span>
-      <span id="status-queries-per-minute" class="value">--</span>
+      <span class="label" title="Derived: actual NPC LLM query rounds per real minute, given the tick rate and game-hour setting above">LLM calls/real-min</span>
+      <span id="status-llm-calls-per-real-minute" class="value">--</span>
     </div>
     <div class="status-row">
       <button id="status-playstate" class="value playstate-btn" type="button">Paused</button>
-    </div>
-    <div class="status-row">
-      <span id="status-mic" class="value">Off</span>
     </div>
   </aside>
 

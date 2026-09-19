@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .identity import DEFAULT_PROFILE_TEMPLATE, Identity
+from .inventory import Inventory
 from .llm import SPEAK_TOOL_NAME, SPEAK_TOOL_SCHEMA, LLMClient, LLMResult
 from .memory import Memory, MemoryStore
 from .tools import ToolRegistry
@@ -46,7 +47,8 @@ class Agent:
         memory: MemoryStore | None = None,
         instructions: str = "",
         profile_template: str = DEFAULT_PROFILE_TEMPLATE,
-        position: tuple[int, int] | None = None,
+        position: tuple[float, float] | None = None,
+        inventory: Inventory | None = None,
     ) -> None:
         self.identity = identity
         self.memory = memory if memory is not None else MemoryStore()
@@ -54,9 +56,20 @@ class Agent:
         self.tools = tools or ToolRegistry()
         self.instructions = instructions
         self.profile_template = profile_template
-        # Dynamic, unlike home/workplace on Identity -- spawns at home and
-        # changes as the move tool (see registry.py) is used.
+        # Dynamic, unlike home/workplace on Identity -- spawns at home. The
+        # move tool (see registry.py) only sets `destination`; the NPC then
+        # actually walks there over time, one NPCRegistry.step_movement()
+        # at a time, carrying `velocity` between steps.
         self.position = position if position is not None else identity.home
+        self.velocity: tuple[float, float] = (0.0, 0.0)
+        self.destination: tuple[int, int] | None = None
+        # Same idea: seeded from the identity's starting money/items, then
+        # changed only by trades (see registry.py's buy/sell tools).
+        self.inventory = (
+            inventory
+            if inventory is not None
+            else Inventory(money=identity.starting_money, items=dict(identity.starting_items))
+        )
 
     def respond(self, stimulus: str, *, scene: Scene | None = None, tags: set[str] | None = None) -> TurnResult:
         scene = scene or Scene()
@@ -88,7 +101,9 @@ class Agent:
         if self.instructions:
             parts.append(self.instructions)
         parts.append(self.identity.prompt_block(self.profile_template))
-        parts.append(f"You are currently at ({self.position[0]}, {self.position[1]}).")
+        parts.append(f"You are currently at ({self.position[0]:.0f}, {self.position[1]:.0f}).")
+        if self.destination is not None:
+            parts.append(f"You are walking toward ({self.destination[0]}, {self.destination[1]}).")
         scene_block = scene.prompt_block()
         if scene_block:
             parts.append(scene_block)

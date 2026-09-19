@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,19 +9,21 @@ from pathlib import Path
 from game_agents.agent import Agent, Scene
 from game_agents.conversation import run_conversation
 from game_agents.identity import Identity
+from game_agents.inventory import Inventory, TradeError, trade
 from game_agents.llm import SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
 from game_agents.memory import MemoryStore
 from game_agents.registry import NPCRegistry
 from game_agents.storage import (
     load_identities,
     load_instructions,
+    load_inventory,
     load_memory,
     load_profile_template,
     save_identities,
     save_memory,
 )
 from game_agents.tools import Tool, ToolRegistry
-from game_agents.world import MAP_MAX, MAP_MIN, clamp_coordinate
+from game_agents.world import MAP_MAX, MAP_MIN, NPC_ACCEL, NPC_MAX_SPEED, clamp_coordinate, distance
 
 
 def _identity(name: str) -> Identity:
@@ -407,7 +410,10 @@ class InitiateConversationToolTests(unittest.TestCase):
             registry = self._registry(tmp, names=("Mara",), tools=common)
 
             names = {t.name for t in registry.get("Mara").tools.all_tools()}
-            self.assertEqual(names, {"initiate_conversation", "move_to", "wait", "wave"})
+            self.assertEqual(
+                names,
+                {"initiate_conversation", "move_to", "wait", "check_inventory", "buy_item", "sell_item", "wave"},
+            )
 
     def test_initiate_conversation_runs_an_exchange_and_releases_busy_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -432,6 +438,22 @@ class InitiateConversationToolTests(unittest.TestCase):
             self.assertIn("busy", result)
             self.assertEqual(len(registry.get("Finn").memory.all()), 0)
 
+    def test_refuses_when_target_is_out_of_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, conversation_turns=2)
+            registry.get("Finn").position = (8, 7)  # ~10.6 away
+
+            result = registry.get("Mara").tools.execute("initiate_conversation", {"target_name": "Finn"})
+
+            self.assertIn("within 10", result)
+            self.assertFalse(registry.is_busy("Mara"))
+            self.assertFalse(registry.is_busy("Finn"))
+            self.assertEqual(len(registry.get("Finn").memory.all()), 0)
+
+            registry.get("Finn").position = (6, 8)  # exactly 10 away: allowed
+            result = registry.get("Mara").tools.execute("initiate_conversation", {"target_name": "Finn"})
+            self.assertIn("You had a conversation", result)
+
     def test_handles_an_unknown_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = self._registry(tmp, names=("Mara",))
@@ -454,9 +476,10 @@ class InitiateConversationToolTests(unittest.TestCase):
 
 
 class MoveToolTests(unittest.TestCase):
-    """The registry-built move_to tool: updates the specific NPC's own
-    position and clamps out-of-range requests to the map's edges, wired
-    through Agent.tools.execute() directly, same as InitiateConversationToolTests.
+    """The registry-built move_to tool: sets the specific NPC's destination
+    (clamped to the map's edges) without teleporting it -- the NPC only
+    gets there by walking, via NPCRegistry.step_movement(). Wired through
+    Agent.tools.execute() directly, same as InitiateConversationToolTests.
     """
 
     def _registry(self, tmp, *, names=("Mara", "Finn"), **kwargs):
@@ -464,14 +487,64 @@ class MoveToolTests(unittest.TestCase):
         save_identities([_identity(n) for n in names], npcs_path)
         return NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient(), **kwargs)
 
-    def test_moves_to_the_requested_coordinate(self):
+    def _walk(self, registry, seconds, dt=1 / 30):
+        for _ in range(round(seconds / dt)):
+            registry.step_movement(dt)
+
+    def test_sets_a_destination_without_teleporting(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = self._registry(tmp, names=("Mara",))
 
             result = registry.get("Mara").tools.execute("move_to", {"x": 30, "y": -20})
 
             self.assertIn("(30, -20)", result)
-            self.assertEqual(registry.get("Mara").position, (30, -20))
+            self.assertEqual(registry.get("Mara").destination, (30, -20))
+            self.assertEqual(registry.get("Mara").position, (0, 0))
+
+    def test_walks_there_over_time_and_stops_on_the_spot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, names=("Mara",))
+            registry.get("Mara").tools.execute("move_to", {"x": 30, "y": -20})
+
+            self._walk(registry, 0.2)
+            partway = registry.get("Mara").position
+            self.assertGreater(distance(partway, (0, 0)), 0)
+            self.assertLess(distance(partway, (0, 0)), distance((30, -20), (0, 0)))
+
+            self._walk(registry, 5)
+            mara = registry.get("Mara")
+            self.assertEqual(mara.position, (30, -20))
+            self.assertEqual(mara.velocity, (0.0, 0.0))
+            self.assertIsNone(mara.destination)
+
+    def test_accelerates_from_rest_and_never_exceeds_max_speed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, names=("Mara",))
+            registry.get("Mara").tools.execute("move_to", {"x": 100, "y": 0})
+
+            registry.step_movement(0.1)
+            self.assertAlmostEqual(registry.get("Mara").velocity[0], NPC_ACCEL * 0.1)
+
+            for _ in range(60):
+                registry.step_movement(1 / 30)
+                self.assertLessEqual(math.hypot(*registry.get("Mara").velocity), NPC_MAX_SPEED + 1e-9)
+
+    def test_busy_npc_brakes_to_a_stop_and_resumes_after(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, names=("Mara",))
+            registry.get("Mara").tools.execute("move_to", {"x": 100, "y": 0})
+            self._walk(registry, 0.5)
+
+            registry.try_occupy("Mara")
+            self._walk(registry, 1)
+            stopped_at = registry.get("Mara").position
+            self.assertEqual(registry.get("Mara").velocity, (0.0, 0.0))
+            self._walk(registry, 1)
+            self.assertEqual(registry.get("Mara").position, stopped_at)
+
+            registry.release("Mara")
+            self._walk(registry, 5)
+            self.assertEqual(registry.get("Mara").position, (100, 0))
 
     def test_clamps_out_of_range_coordinates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -479,13 +552,14 @@ class MoveToolTests(unittest.TestCase):
 
             registry.get("Mara").tools.execute("move_to", {"x": 500, "y": -500})
 
-            self.assertEqual(registry.get("Mara").position, (100, -100))
+            self.assertEqual(registry.get("Mara").destination, (100, -100))
 
     def test_only_moves_the_calling_npc(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = self._registry(tmp)
 
             registry.get("Mara").tools.execute("move_to", {"x": 10, "y": 10})
+            self._walk(registry, 3)
 
             self.assertEqual(registry.get("Mara").position, (10, 10))
             self.assertEqual(registry.get("Finn").position, (0, 0))  # default home, untouched
@@ -597,3 +671,158 @@ class ConversationLoggingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InventoryTests(unittest.TestCase):
+    def test_item_names_are_normalized(self):
+        inv = Inventory(money=5, items={"Spare  Net ": 1, "spare net": 2})
+        self.assertEqual(inv.items, {"spare net": 3})
+        self.assertEqual(inv.count("SPARE NET"), 3)
+
+    def test_describe_lists_coins_and_items(self):
+        self.assertEqual(Inventory(money=1).describe(), "You have 1 coin and no items.")
+        self.assertEqual(
+            Inventory(money=7, items={"fish": 2, "anchor": 1}).describe(),
+            "You have 7 coins and: 1 x anchor, 2 x fish.",
+        )
+
+
+class TradeTests(unittest.TestCase):
+    def test_successful_trade_moves_item_and_coins(self):
+        buyer, seller = Inventory(money=10), Inventory(money=0, items={"net": 2})
+
+        trade(buyer=buyer, seller=seller, item="Net", quantity=2, total_price=8)
+
+        self.assertEqual((buyer.money, buyer.items), (2, {"net": 2}))
+        self.assertEqual((seller.money, seller.items), (8, {}))
+
+    def test_failed_trades_leave_both_inventories_untouched(self):
+        cases = [
+            dict(item="net", quantity=1, total_price=11),  # buyer can't afford
+            dict(item="net", quantity=3, total_price=1),  # seller doesn't have enough
+            dict(item="boat", quantity=1, total_price=1),  # seller doesn't have it at all
+            dict(item="net", quantity=0, total_price=1),
+            dict(item="net", quantity=1, total_price=-5),
+            dict(item="  ", quantity=1, total_price=1),
+        ]
+        for case in cases:
+            with self.subTest(**case):
+                buyer, seller = Inventory(money=10), Inventory(money=0, items={"net": 2})
+                with self.assertRaises(TradeError):
+                    trade(buyer=buyer, seller=seller, **case)
+                self.assertEqual((buyer.money, buyer.items), (10, {}))
+                self.assertEqual((seller.money, seller.items), (0, {"net": 2}))
+
+    def test_cannot_trade_with_yourself(self):
+        inv = Inventory(money=10, items={"net": 1})
+        with self.assertRaises(TradeError):
+            trade(buyer=inv, seller=inv, item="net", quantity=1, total_price=1)
+
+
+class InventoryToolTests(unittest.TestCase):
+    """check_inventory / buy_item / sell_item as built by the registry,
+    wired through Agent.tools.execute() directly, same as MoveToolTests.
+    """
+
+    def _registry(self, tmp, **kwargs):
+        mara, finn = _identity("Mara"), _identity("Finn")
+        mara.starting_money, mara.starting_items = 20, {"horseshoe": 3}
+        finn.starting_money, finn.starting_items = 5, {"fish": 4}
+        npcs_path = Path(tmp) / "npcs.json"
+        save_identities([mara, finn], npcs_path)
+        return NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient(), **kwargs)
+
+    def test_starts_from_the_identity_starting_inventory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp)
+
+            result = registry.get("Mara").tools.execute("check_inventory", {})
+
+            self.assertEqual(result, "You have 20 coins and: 3 x horseshoe.")
+
+    def test_buy_moves_goods_and_coins_and_tells_the_seller(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp)
+
+            result = registry.get("Mara").tools.execute(
+                "buy_item", {"item": "fish", "seller_name": "finn", "total_price": 6, "quantity": 2}
+            )
+
+            self.assertIn("You bought 2 x fish", result)
+            mara, finn = registry.get("Mara").inventory, registry.get("Finn").inventory
+            self.assertEqual((mara.money, mara.count("fish")), (14, 2))
+            self.assertEqual((finn.money, finn.count("fish")), (11, 2))
+            [memory] = registry.get("Finn").memory.all()
+            self.assertIn("Sold 2 x fish to Mara", memory.content)
+            self.assertEqual(memory.tags, {"Mara"})
+
+    def test_sell_is_the_same_trade_from_the_other_side(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp)
+
+            result = registry.get("Mara").tools.execute(
+                "sell_item", {"item": "horseshoe", "buyer_name": "Finn", "total_price": 5}
+            )
+
+            self.assertIn("You sold 1 x horseshoe", result)
+            self.assertEqual(registry.get("Mara").inventory.money, 25)
+            self.assertEqual(registry.get("Finn").inventory.money, 0)
+            self.assertEqual(registry.get("Finn").inventory.count("horseshoe"), 1)
+
+    def test_unaffordable_or_missing_goods_change_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp)
+            mara = registry.get("Mara")
+
+            too_poor = registry.get("Finn").tools.execute(
+                "buy_item", {"item": "horseshoe", "seller_name": "Mara", "total_price": 6}
+            )
+            no_such_item = mara.tools.execute("sell_item", {"item": "anvil", "buyer_name": "Finn", "total_price": 1})
+            nobody = mara.tools.execute("buy_item", {"item": "fish", "seller_name": "Nobody", "total_price": 1})
+
+            self.assertIn("didn't go through", too_poor)
+            self.assertIn("didn't go through", no_such_item)
+            self.assertIn("Nobody", nobody)
+            self.assertEqual((mara.inventory.money, mara.inventory.items), (20, {"horseshoe": 3}))
+            self.assertEqual(registry.get("Finn").inventory.money, 5)
+            self.assertEqual(len(registry.get("Finn").memory.all()), 0)
+
+    def test_inventory_persists_across_reloads_when_a_dir_is_given(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inventory_dir = Path(tmp) / "inventory"
+            registry = self._registry(tmp, inventory_dir=inventory_dir)
+            registry.get("Mara").tools.execute("buy_item", {"item": "fish", "seller_name": "Finn", "total_price": 3})
+            registry.save_all()
+
+            reloaded = self._registry(tmp, inventory_dir=inventory_dir)
+
+            self.assertEqual(reloaded.get("Mara").inventory.money, 17)
+            self.assertEqual(reloaded.get("Finn").inventory.count("fish"), 3)
+            self.assertIsNone(load_inventory("Nobody", inventory_dir))
+
+    def test_identity_round_trip_keeps_starting_inventory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "npcs.json"
+            identity = _identity("Mara")
+            identity.starting_money, identity.starting_items = 9, {"hammer": 1}
+            save_identities([identity], path)
+
+            [loaded] = load_identities(path)
+
+            self.assertEqual((loaded.starting_money, loaded.starting_items), (9, {"hammer": 1}))
+
+    def test_trade_refused_when_npcs_are_out_of_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp)
+            registry.get("Finn").position = (6, 8)  # exactly 10 away: allowed
+            ok = registry.get("Mara").tools.execute("buy_item", {"item": "fish", "seller_name": "Finn", "total_price": 1})
+            self.assertIn("You bought", ok)
+
+            registry.get("Finn").position = (8, 7)  # ~10.6 away: refused
+            refused = registry.get("Mara").tools.execute(
+                "sell_item", {"item": "horseshoe", "buyer_name": "Finn", "total_price": 1}
+            )
+
+            self.assertIn("within 10", refused)
+            self.assertEqual(registry.get("Mara").inventory.count("horseshoe"), 3)
+            self.assertEqual(registry.get("Finn").inventory.money, 6)  # only the first trade's coin
