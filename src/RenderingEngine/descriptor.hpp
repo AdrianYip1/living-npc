@@ -18,11 +18,13 @@ namespace HTN {
 											  VkDescriptorSetLayout& descriptorLayout);
 
 		static void createDescriptorPool(Device& device, std::vector<VkDescriptorType> descriptorTypes,
-										 VkDescriptorPool& descriptorPool);
+										 VkDescriptorPool& descriptorPool, u32 setGroups = 1);
 
 		static void createDescriptorSets(Device& device, const VkDescriptorSetLayout& setLayout,
 										 const VkDescriptorPool& descriptorPool,
+										 const std::vector<u32>& poolBindings,
 										 const std::vector<std::vector<VkBuffer>>& buffers,
+										 const std::vector<VkDescriptorImageInfo>& images,
 										 const std::vector<VkDescriptorType> descriptorType,
 										 std::vector<VkDescriptorSet>& descriptorSets);
 	};
