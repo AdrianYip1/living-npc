@@ -489,7 +489,16 @@ class InitiateConversationToolTests(unittest.TestCase):
             names = {t.name for t in registry.get("Mara").tools.all_tools()}
             self.assertEqual(
                 names,
-                {"initiate_conversation", "move_to", "wait", "check_inventory", "buy_item", "sell_item", "wave"},
+                {
+                    "initiate_conversation",
+                    "move_to",
+                    "wait",
+                    "check_inventory",
+                    "note_player_name",
+                    "buy_item",
+                    "sell_item",
+                    "wave",
+                },
             )
 
     def test_initiate_conversation_runs_an_exchange_and_releases_busy_state(self):
@@ -651,6 +660,130 @@ class MoveToolTests(unittest.TestCase):
 
             self.assertEqual(registry.get("Mara").position, (10, 10))
             self.assertEqual(registry.get("Finn").position, (0, 0))  # default home, untouched
+
+
+class _ScriptedLLM:
+    """Replies with each preset tool call in turn, recording what it was
+    offered and told each time."""
+
+    def __init__(self, *calls: ToolCall):
+        self._calls = list(calls)
+        self.messages: list[list[dict]] = []
+        self.tool_names: list[set[str]] = []
+
+    def complete(self, *, system, messages, tools):
+        self.messages.append(messages)
+        self.tool_names.append({t["name"] for t in tools})
+        return LLMResult(tool_call=self._calls.pop(0))
+
+
+class WhereaboutsTests(unittest.TestCase):
+    def _registry(self, tmp, llm=None, **kwargs):
+        mara, finn = _identity("Mara"), _identity("Finn")
+        mara.workplace, finn.home = (12, -30), (-90, 90)
+        npcs_path = Path(tmp) / "npcs.json"
+        save_identities([mara, finn], npcs_path)
+        return NPCRegistry(npcs_path, Path(tmp) / "memory", llm or MockLLMClient(), **kwargs)
+
+    def test_a_look_up_is_handed_back_and_the_npc_decides_again_same_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _ScriptedLLM(
+                ToolCall(name="check_inventory", arguments={}),
+                ToolCall(name="move_to", arguments={"x": -90, "y": 90}),
+            )
+            registry = self._registry(tmp, llm)
+            mara = registry.get("Mara")
+
+            result = mara.respond("It is now 08:00.", routine=True)
+
+            self.assertEqual(result.action["name"], "move_to")
+            self.assertIn("check_inventory", llm.tool_names[0])
+            self.assertNotIn("check_inventory", llm.tool_names[1])  # one look per turn
+            self.assertIn("(You check inventory: You have", llm.messages[1][0]["content"])
+            self.assertEqual(mara.memory.all(), [])  # still a routine turn
+
+    def test_everyone_knows_where_residents_usually_are(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "world.json"
+            world.write_text(
+                json.dumps({"places": [{"name": "The Forge", "position": [12, -30], "description": "Hot."}]}),
+                encoding="utf-8",
+            )
+            registry = self._registry(tmp, world_path=world)
+            traveler = registry.add_traveler(_identity("T"), position=(0, 0))
+
+            mara_line = "- Mara: works at The Forge (12, -30); lives at (0, 0)."
+            finn_line = "- Finn: works at (0, 0); lives at (-90, 90)."
+            traveler_prompt = traveler._build_system_prompt(Scene(), [])
+            self.assertIn(mara_line, traveler_prompt)
+            self.assertIn(finn_line, traveler_prompt)
+            # A resident sees everyone else, not themselves.
+            finn_prompt = registry.get("Finn")._build_system_prompt(Scene(), [])
+            self.assertIn(mara_line, finn_prompt)
+            self.assertNotIn(finn_line, finn_prompt)
+
+
+class PlayerTests(unittest.TestCase):
+    def _registry(self, tmp, llm=None, **kwargs):
+        npcs_path = Path(tmp) / "npcs.json"
+        save_identities([_identity("Mara"), _identity("Finn")], npcs_path)
+        return NPCRegistry(npcs_path, Path(tmp) / "memory", llm or MockLLMClient(), **kwargs)
+
+    def test_a_stranger_until_they_give_their_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mara = self._registry(tmp).get("Mara")
+            self.assertEqual(mara.player_label(), "the player (you don't know their name yet)")
+
+            mara.tools.execute("note_player_name", {"player_name": " Raymond "})
+
+            self.assertEqual(mara.player_label(), "Raymond (the player)")
+
+    def test_noting_a_name_is_only_offered_talking_with_the_player(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _RecordingLLM()
+            mara = self._registry(tmp, llm).get("Mara")
+
+            mara.respond("hi", conversation=True)
+            self.assertNotIn("note_player_name", {t["name"] for t in llm.last_tools})
+            mara.respond("hi", conversation=True, with_player=True)
+            self.assertIn("note_player_name", {t["name"] for t in llm.last_tools})
+
+    def test_known_names_persist_for_residents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            names = Path(tmp) / "player_names.json"
+            registry = self._registry(tmp, player_names_path=names)
+            registry.get("Mara").player_name = "Raymond"
+            registry.save_all()
+
+            reloaded = self._registry(tmp, player_names_path=names)
+            self.assertEqual(reloaded.get("Mara").player_name, "Raymond")
+            self.assertIsNone(reloaded.get("Finn").player_name)
+
+    def test_starting_a_conversation_with_the_player(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp)
+            invited = []
+            registry.conversation_hooks.invite_player = lambda name: invited.append(name)
+            mara = registry.get("Mara")
+            mara.position = (0, 0)
+            talk = lambda target: mara.tools.execute("initiate_conversation", {"target_name": target})
+
+            self.assertEqual(talk("the player"), "The player isn't around.")
+            registry.player_position = (50, 0)
+            self.assertIn("50 units away", talk("the player"))
+            registry.player_position = (5, 0)
+            self.assertEqual(talk("the player"), "You start a conversation with the player.")
+            mara.player_name = "Raymond"
+            self.assertEqual(talk("raymond"), "You start a conversation with the player.")
+            self.assertEqual(invited, ["Mara", "Mara"])
+
+    def test_the_player_being_busy_is_passed_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp)
+            registry.conversation_hooks.invite_player = lambda name: "The player is busy."
+            registry.player_position = (0, 0)
+            result = registry.get("Mara").tools.execute("initiate_conversation", {"target_name": "player"})
+            self.assertEqual(result, "The player is busy.")
 
 
 class WaitToolTests(unittest.TestCase):

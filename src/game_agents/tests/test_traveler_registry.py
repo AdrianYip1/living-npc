@@ -53,7 +53,7 @@ class TravelerLifecycleTests(unittest.TestCase):
             registry = _registry(tmp)
             agent = registry.add_traveler(_identity("Wren"), position=(0, 0))
             names = {schema["name"] for schema in agent.tools.schemas()}
-            self.assertEqual(names, {"move_to", "initiate_conversation", "buy_item", "wait"})
+            self.assertEqual(names, {"move_to", "initiate_conversation", "buy_item", "wait", "note_player_name"})
 
     def test_duplicate_name_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -179,9 +179,13 @@ class TravelerPromptTests(unittest.TestCase):
 
             self.assertIn("a traveler passing through town", llm.last_system)
             self.assertIn("Your exit point: (100, 7).", llm.last_system)
-            self.assertIn(f"at most {NPCRegistry.TRAVELER_MAX_WORDS} words", llm.last_system)
+            # The word cap lives on the speak tool, not in the prompt too.
+            speak = next(t for t in llm.last_tools if t["name"] == SPEAK_TOOL_NAME)
+            self.assertIn(f"at most {NPCRegistry.TRAVELER_MAX_WORDS} words", speak["description"])
             self.assertNotIn("{max_words}", llm.last_system)
             self.assertNotIn("Workplace:", llm.last_system)
+            # Routine is for residents only.
+            self.assertNotIn("daily routine", llm.last_system)
 
     def test_residents_keep_their_own_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,6 +194,7 @@ class TravelerPromptTests(unittest.TestCase):
             registry.get("Mara").respond("hello")
             self.assertIn("Workplace:", llm.last_system)
             self.assertNotIn("passing through", llm.last_system)
+            self.assertIn("daily routine", llm.last_system)
 
     def test_traveler_speech_is_capped(self):
         with tempfile.TemporaryDirectory() as tmp:

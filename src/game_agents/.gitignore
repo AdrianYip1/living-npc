@@ -5,3 +5,4 @@ __pycache__/
 data/memory/*.json
 data/inventory/*.json
 data/traveler_names.json
+data/player_names.json

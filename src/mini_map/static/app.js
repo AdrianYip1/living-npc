@@ -225,6 +225,37 @@ function applyState(data) {
 
   logTravelerArrivals(data.traveler_arrivals || []);
   receiveSpeech(data.speech || []);
+  receiveInvite(data.player_invite || null);
+}
+
+// An NPC-started conversation with the player (see Simulation.
+// _invite_player): the server has already claimed the NPC, so the panel
+// just opens -- no /api/conversation/start. `invite.opening` is null until
+// the NPC's first line is ready, which can take a poll or two.
+let lastInviteId = null;
+let activeInvite = null; // { id, openingShown } while its panel is open
+
+function receiveInvite(invite) {
+  if (invite && invite.id !== lastInviteId) {
+    lastInviteId = invite.id;
+    const npc = npcs.find((entry) => entry.name === invite.name);
+    if (npc && !state.conversationOpen) {
+      showConversationPanel(npc);
+      appendLogLine(`${npc.name} comes over to talk to you.`, { system: true });
+      activeInvite = { id: invite.id, openingShown: false };
+    }
+  }
+  if (!activeInvite) return;
+  if (!invite || invite.id !== activeInvite.id) {
+    // Over on the server's side before it got going (the NPC acted
+    // instead of speaking), or ended some other way.
+    closeConversation();
+    return;
+  }
+  if (invite.opening && !activeInvite.openingShown) {
+    activeInvite.openingShown = true;
+    appendLogLine(`${invite.name}: ${invite.opening}`);
+  }
 }
 
 // Speaker name -> the bubble currently over their head. Times are on
@@ -970,7 +1001,7 @@ async function postJSON(path, body) {
 // use, so a real conversation locks this NPC out of autonomous behavior
 // for as long as the panel stays open, exactly like being mid-exchange
 // with another NPC would.
-async function openConversation(npc) {
+function showConversationPanel(npc) {
   state.conversationOpen = true;
   conversationPartner = npc;
   conversationTarget.textContent = `Talking to ${npc.name}`;
@@ -978,6 +1009,10 @@ async function openConversation(npc) {
   proximityHint.classList.add("hidden");
   conversationLog.innerHTML = "";
   conversationInput.focus();
+}
+
+async function openConversation(npc) {
+  showConversationPanel(npc);
 
   let ok = false;
   try {
@@ -994,6 +1029,7 @@ async function openConversation(npc) {
 
 function closeConversation() {
   cancelDictation();
+  activeInvite = null;
   state.conversationOpen = false;
   const npc = conversationPartner;
   conversationPartner = null;

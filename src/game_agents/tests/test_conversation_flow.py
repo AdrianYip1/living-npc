@@ -145,16 +145,18 @@ class ConversationHooksTests(unittest.TestCase):
 
 
 class SurroundingsTests(unittest.TestCase):
-    def test_splits_people_by_reach_and_skips_the_far_away(self):
+    def test_splits_everyone_by_reach_nearest_first(self):
         text = render_surroundings(
             (0, 0), [("Far", (90, 0), False), ("View", (30, 0), False), ("Near", (5, 0), True)]
         )
         self.assertEqual(
-            text, f"{IN_REACH_LABEL}: Near at (5, 0) (busy talking).\n{IN_VIEW_LABEL}: View at (30, 0)."
+            text,
+            f"{IN_REACH_LABEL}: Near at (5, 0) (busy talking).\n"
+            f"{IN_VIEW_LABEL}: View at (30, 0); Far at (90, 0).",
         )
 
-    def test_empty_when_nobody_is_around(self):
-        self.assertEqual(render_surroundings((0, 0), [("Far", (90, 90), False)]), "")
+    def test_empty_when_nobody_else_is_in_town(self):
+        self.assertEqual(render_surroundings((0, 0), []), "")
 
 
 class SoakRegressionTests(unittest.TestCase):

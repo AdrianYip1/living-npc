@@ -18,8 +18,11 @@ from .storage import (
     load_memory,
     load_places,
     load_profile_template,
+    load_player_names,
     render_places,
+    render_residents,
     save_inventory,
+    save_player_names,
     save_memory,
 )
 from .tools import Tool, ToolRegistry, make_wait_tool
@@ -88,6 +91,7 @@ class NPCRegistry:
         conversation_log_dir: str | Path | None = None,
         inventory_dir: str | Path | None = None,
         world_path: str | Path | None = None,
+        player_names_path: str | Path | None = None,
     ) -> None:
         # Exposed so anything generating content in the same world (e.g.
         # traveler identities) uses the same backend as the NPCs.
@@ -114,6 +118,10 @@ class NPCRegistry:
         # free to leave?" and "claim them for a conversation" can't race.
         self._busy_lock = threading.RLock()
         instructions = load_instructions(instructions_path) if instructions_path else ""
+        # Routine is a resident thing -- a traveler's day is its reason for
+        # being in town (see traveler_instructions), not a schedule.
+        resident_lines = load_instructions(instructions_path, key="resident_instructions") if instructions_path else ""
+        resident_instructions = "\n".join(part for part in (instructions, resident_lines) if part)
         profile_template = (load_profile_template(instructions_path) if instructions_path else "") or DEFAULT_PROFILE_TEMPLATE
         traveler_lines = load_instructions(instructions_path, key="traveler_instructions") if instructions_path else ""
         traveler_lines = traveler_lines.replace("{max_words}", str(self.TRAVELER_MAX_WORDS))
@@ -124,12 +132,25 @@ class NPCRegistry:
         # Shared by everyone, residents and travelers alike (see world.json).
         # Public so the simulation can pick a place for a traveler to visit.
         self.places = load_places(world_path) if world_path else []
-        self._world_context = render_places(self.places)
+        identities = load_identities(npcs_path)
+        places_context = render_places(self.places)
+        self._world_context = "\n\n".join(
+            part for part in (places_context, render_residents(identities, self.places)) if part
+        )
+        # Where the player is standing, in map units, if anyone's told us
+        # (mini_map.Simulation does, as the page reports it) -- so an NPC
+        # can tell whether they're close enough to talk to. None means the
+        # player isn't in the world at all.
+        self.player_position: tuple[float, float] | None = None
+        # What each resident knows the player as, across runs (travelers
+        # always start out not knowing). None: not persisted.
+        self._player_names_path = Path(player_names_path) if player_names_path else None
+        player_names = load_player_names(self._player_names_path) if self._player_names_path else {}
         common_tools = tools.all_tools() if tools is not None else []
 
         self._agents: dict[str, Agent] = {}
         self._travelers: set[str] = set()
-        for identity in load_identities(npcs_path):
+        for identity in identities:
             memory = load_memory(identity.name, self._memory_dir)
             inventory = load_inventory(identity.name, self._inventory_dir) if self._inventory_dir else None
             npc_tools = ToolRegistry()
@@ -139,6 +160,7 @@ class NPCRegistry:
             npc_tools.register(self._make_move_tool(identity.name))
             npc_tools.register(make_wait_tool())
             npc_tools.register(self._make_check_inventory_tool(identity.name))
+            npc_tools.register(self._make_note_player_name_tool(identity.name))
             npc_tools.register(self._make_trade_tool(identity.name, buying=True))
             npc_tools.register(self._make_trade_tool(identity.name, buying=False))
             self._agents[identity.name] = Agent(
@@ -146,12 +168,28 @@ class NPCRegistry:
                 llm,
                 npc_tools,
                 memory=memory,
-                instructions=instructions,
+                instructions=resident_instructions,
                 profile_template=profile_template,
                 position=identity.home,
                 inventory=inventory,
-                standing_context=self._world_context,
+                # Everyone but themselves -- their own home and workplace
+                # are already in their profile.
+                standing_context="\n\n".join(
+                    part
+                    for part in (
+                        places_context,
+                        render_residents([i for i in identities if i is not identity], self.places),
+                    )
+                    if part
+                ),
             )
+            self._agents[identity.name].player_name = player_names.get(identity.name)
+
+    @property
+    def conversation_log_dir(self) -> Path | None:
+        """Where transcripts go -- NPC-to-NPC ones from here, the player's
+        from mini_map.Simulation. None: not saved."""
+        return self._conversation_log_dir
 
     def get(self, name: str) -> Agent | None:
         return self._agents.get(name)
@@ -196,6 +234,7 @@ class NPCRegistry:
         tools.register(self._make_initiate_conversation_tool(name, self._conversation_turns))
         tools.register(self._make_trade_tool(name, buying=True))
         tools.register(make_wait_tool())
+        tools.register(self._make_note_player_name_tool(name))
         agent = Agent(
             identity,
             self.llm,
@@ -231,6 +270,11 @@ class NPCRegistry:
             save_memory(agent.identity.name, agent.memory, self._memory_dir)
             if self._inventory_dir is not None:
                 save_inventory(agent.identity.name, agent.inventory, self._inventory_dir)
+        if self._player_names_path is not None:
+            save_player_names(
+                {agent.identity.name: agent.player_name for agent in self.residents() if agent.player_name},
+                self._player_names_path,
+            )
 
     # ------------------------------------------------------------------ #
     # busy tracking
@@ -309,6 +353,8 @@ class NPCRegistry:
     # ------------------------------------------------------------------ #
     def _make_initiate_conversation_tool(self, initiator_name: str, turns: int) -> Tool:
         def handler(target_name: str) -> str:
+            if self._means_player(initiator_name, target_name):
+                return self._invite_player(initiator_name)
             target = self._resolve(target_name)
             if target is None:
                 return f"There's no one named {target_name!r} nearby."
@@ -356,15 +402,67 @@ class NPCRegistry:
         return Tool(
             name="initiate_conversation",
             description=(
-                "Start a conversation with another NPC. Only works if they're within "
-                f"{INTERACTION_RANGE} units of you -- walk over to them first if they aren't."
+                "Start a conversation with someone: a townsperson, a traveler, or the player. Only works "
+                f"if they're within {INTERACTION_RANGE} units of you -- walk over to them first if they aren't."
             ),
             parameters={
                 "type": "object",
-                "properties": {"target_name": {"type": "string", "description": "The name of the NPC to talk to."}},
+                "properties": {
+                    "target_name": {
+                        "type": "string",
+                        "description": 'Who to talk to: their name, or "the player" if you don\'t know the player\'s name.',
+                    }
+                },
                 "required": ["target_name"],
             },
             handler=handler,
+        )
+
+    def _means_player(self, name: str, target_name: str) -> bool:
+        lowered = target_name.strip().lower()
+        if lowered in {"player", "the player"} or lowered.startswith("the player "):
+            return True
+        known = self._agents[name].player_name
+        return bool(known) and lowered == known.strip().lower() and self._resolve(target_name) is None
+
+    def _invite_player(self, name: str) -> str:
+        if self.player_position is None:
+            return "The player isn't around."
+        gap = distance(self._agents[name].position, self.player_position)
+        if gap > INTERACTION_RANGE:
+            return f"The player is {gap:.0f} units away -- you need to be within {INTERACTION_RANGE} to talk."
+        invite = self.conversation_hooks.invite_player
+        if invite is None:
+            return "You can't talk to the player right now."
+        # The hook claims this NPC and opens the conversation on the
+        # player's side -- or hands back why it couldn't.
+        refusal = invite(name)
+        if refusal is not None:
+            return refusal
+        return f"{CONVERSATION_STARTED_PREFIX}the player."
+
+    def _make_note_player_name_tool(self, name: str) -> Tool:
+        def handler(player_name: str) -> str:
+            agent = self._agents.get(name)
+            cleaned = player_name.strip()
+            if agent is None or not cleaned:
+                return "You didn't catch a name."
+            agent.player_name = cleaned
+            return f"You'll remember the player's name is {cleaned}."
+
+        return Tool(
+            name="note_player_name",
+            description=(
+                "Remember the player's name, once they've told you what it is. "
+                "You'll still get to decide what to say next."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"player_name": {"type": "string", "description": "The name the player gave you."}},
+                "required": ["player_name"],
+            },
+            handler=handler,
+            informational=True,
         )
 
     def _make_move_tool(self, name: str) -> Tool:
@@ -408,9 +506,13 @@ class NPCRegistry:
 
         return Tool(
             name="check_inventory",
-            description="Look through what you're carrying: your coins and every item you have.",
+            description=(
+                "Look through what you're carrying: your coins and every item you have. "
+                "You'll still get to decide what to do or say next."
+            ),
             parameters={"type": "object", "properties": {}},
             handler=handler,
+            informational=True,
         )
 
     def _make_trade_tool(self, name: str, *, buying: bool) -> Tool:

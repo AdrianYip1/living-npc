@@ -9,9 +9,10 @@ from .agent import Agent, Scene
 
 
 # Actions that don't end a conversation when taken mid-exchange: closing a
-# deal just agreed on out loud, or checking your pack to answer a question.
-# Anything else (walking off, waiting) still means the conversation's over.
-IN_CONVERSATION_ACTIONS = frozenset({"buy_item", "sell_item", "check_inventory"})
+# deal just agreed on out loud. Anything else (walking off, waiting) still
+# means the conversation's over. Look-ups like check_inventory never get
+# here -- Agent.respond() hands their result back within the same turn.
+IN_CONVERSATION_ACTIONS = frozenset({"buy_item", "sell_item"})
 
 
 @dataclass
@@ -41,7 +42,8 @@ class ConversationHooks:
       Returns False if it couldn't be scheduled.
     - on_start: called with (initiator, target) once the pair is claimed,
       just before the first turn.
-    - scene: the current time/weather, as each turn starts.
+    - scene: the current time/weather (and who's around), given the
+      agent whose turn is starting.
     - on_turn: called with each turn as soon as it's decided -- and may
       block, which is how the simulation paces lines out for reading.
     - on_end: called with the whole transcript, before both sides are
@@ -49,14 +51,20 @@ class ConversationHooks:
     - refuse: asked before an exchange starts, with (initiator, target);
       a reason string turns the attempt down, handed back to the initiator
       as its tool result. None lets it go ahead.
+    - invite_player: an NPC (by name) starting a conversation with the
+      player, already checked to be in range. Claims the NPC and opens the
+      conversation on the player's side, returning None -- or a reason it
+      couldn't (the player's already talking to someone), handed back as
+      the tool result. Unset: nobody can start one.
     """
 
     run: Callable[[Callable[[], None]], bool] | None = None
     on_start: Callable[[str, str], None] | None = None
-    scene: Callable[[], Scene] | None = None
+    scene: Callable[[Agent], Scene] | None = None
     on_turn: Callable[[ConversationTurn], None] | None = None
     on_end: Callable[[list[ConversationTurn]], None] | None = None
     refuse: Callable[[str, str], str | None] | None = None
+    invite_player: Callable[[str], str | None] | None = None
 
 
 def run_conversation(
@@ -64,7 +72,7 @@ def run_conversation(
     target: Agent,
     *,
     turns: int = 4,
-    scene: Callable[[], Scene] | None = None,
+    scene: Callable[[Agent], Scene] | None = None,
     on_turn: Callable[[ConversationTurn], None] | None = None,
 ) -> list[ConversationTurn]:
     """Alternates turns between two agents, the initiator opening. Each
@@ -96,7 +104,7 @@ def run_conversation(
     speaker, other = initiator, target
     closing = False
     for _ in range(turns):
-        base = scene() if scene is not None else Scene()
+        base = scene(speaker) if scene is not None else Scene()
         context = _conversation_context(speaker, other, lines, opening=not transcript, closing=closing)
         result = speaker.respond(
             stimulus,

@@ -22,9 +22,10 @@ from environment_agent.agent import EnvironmentAgent
 from environment_agent.time_of_day import MINUTES_PER_DAY
 from environment_agent.travelers import Traveler, spare_names
 
-from game_agents.agent import Agent, Scene, TurnResult
-from game_agents.conversation import ConversationHooks, ConversationTurn
+from game_agents.agent import CONVERSATION_ONLY_ACTIONS, Agent, Scene, TurnResult
+from game_agents.conversation import ConversationHooks, ConversationTurn, save_transcript
 from game_agents.conversation_export import (
+    PLAYER_ID,
     PLAYER_PARTICIPANT,
     ConversationExporter,
     npc_participant,
@@ -277,6 +278,18 @@ class Simulation:
         self._player_export: tuple[str, str] | None = None
         self._export_lock = threading.Lock()
         self._player_position: tuple[float, float] = (0.0, 0.0)
+        # Who the player is talking to right now, if anyone -- one
+        # conversation at a time, whoever started it. And, when an NPC
+        # started it, what the page needs to open it on the player's side:
+        # {"id", "name", "opening"} ("opening" None until the line's ready).
+        self._player_partner: str | None = None
+        self._player_invite: dict[str, Any] | None = None
+        self._next_invite_id = 1
+        # The player's current conversation as a transcript, and the file
+        # it's saved to -- rewritten after every line, so a conversation cut
+        # short (the server stopped) still leaves everything said so far.
+        self._player_log: tuple[Path, list[ConversationTurn]] | None = None
+        self._player_lock = threading.Lock()
         # The direction each NPC last moved in, so it keeps facing that way
         # once it stops (see export_npc_state), and when that last went out.
         self._facing: dict[str, tuple[float, float]] = {}
@@ -288,6 +301,7 @@ class Simulation:
             on_turn=self._on_conversation_turn,
             on_end=self._on_conversation_end,
             refuse=self._refuse_conversation,
+            invite_player=self._invite_player,
         )
 
     def run_forever(self) -> None:
@@ -652,6 +666,10 @@ class Simulation:
             for other in self._registry.all()
             if other is not agent
         ]
+        player_position = self._registry.player_position
+        if player_position is not None:
+            talking = self._player_partner is not None and self._player_partner != agent.identity.name
+            others.append((agent.player_label(), player_position, talking))
         return render_surroundings(agent.position, others)
 
     def _query_npcs(self) -> None:
@@ -676,7 +694,8 @@ class Simulation:
             scene = Scene(
                 time=f"{clock} ({phase})",
                 context=(
-                    f"It's {clock}, {phase}, and {weather} out. Decide what you do right now, guided by your habits."
+                    f"It's {clock}, {phase}, and {weather} out. Decide what you do right now, "
+                    "guided by your habits, personal profile, and recent interactions."
                     + (f"\n{surroundings}" if surroundings else "")
                 ),
             )
@@ -828,6 +847,8 @@ class Simulation:
 
     def set_player_position(self, x: float, y: float) -> None:
         self._player_position = (x, y)
+        # Where NPCs see the player, and check they're close enough to talk.
+        self._registry.player_position = (x, y)
 
     def update_active_conversation(self) -> None:
         """Points active.json at the player's conversation if there is one,
@@ -1004,17 +1025,144 @@ class Simulation:
         to them, exactly as if they were mid-exchange with someone else.
         """
         agent = self._registry.get(name)
-        if agent is None or not self._registry.try_occupy(name):
+        if agent is None:
             return False
-        if self._exporter is not None:
-            conversation_id = self._exporter.start([dict(PLAYER_PARTICIPANT), npc_participant(agent.identity)])
-            with self._export_lock:
-                previous, self._player_export = self._player_export, (conversation_id, name)
-            if previous is not None:
-                self._exporter.end(previous[0])
+        with self._player_lock:
+            if self._player_partner not in (None, name) or not self._registry.try_occupy(name):
+                return False
+            self._player_partner = name
+            self._begin_player_log(f"player_{name}")
+        self._start_player_export(agent)
         return True
 
+    def _begin_player_log(self, stem: str) -> None:
+        """Named like NPC-to-NPC transcripts: whoever started it first."""
+        log_dir = self._registry.conversation_log_dir
+        if log_dir is None:
+            self._player_log = None
+            return
+        self._player_log = (log_dir / f"{stem}_{int(time.time() * 1000)}.json", [])
+
+    def _log_player_turn(self, name: str, turn: ConversationTurn) -> None:
+        with self._player_lock:
+            if self._player_partner != name or self._player_log is None:
+                return
+            path, transcript = self._player_log
+            transcript.append(turn)
+            save_transcript(transcript, path)
+
+    def _log_npc_reply(self, name: str, stimulus: str, result: TurnResult) -> None:
+        self._log_player_turn(
+            name,
+            ConversationTurn(
+                speaker=name,
+                listener=PLAYER_ID,
+                stimulus=stimulus,
+                utterance=result.utterance,
+                action=result.action,
+                ends_conversation=result.ends_conversation,
+            ),
+        )
+
+    def _start_player_export(self, agent: Agent) -> None:
+        if self._exporter is None:
+            return
+        conversation_id = self._exporter.start([dict(PLAYER_PARTICIPANT), npc_participant(agent.identity)])
+        with self._export_lock:
+            previous, self._player_export = self._player_export, (conversation_id, agent.identity.name)
+        if previous is not None:
+            self._exporter.end(previous[0])
+
+    def _invite_player(self, name: str) -> str | None:
+        """The invite_player hook: `name` walked up to the player to talk.
+        Claims them and opens the conversation now (so the player can't be
+        grabbed by someone else meanwhile); their opening line is decided
+        on a worker, and the page opens the panel on its own (see state()'s
+        player_invite).
+        """
+        agent = self._registry.get(name)
+        if agent is None:
+            return "You can't talk to the player right now."
+        with self._player_lock:
+            if self._player_partner is not None:
+                return "The player is busy talking with someone else right now."
+            # The inviting NPC's own turn is still running, so it isn't
+            # claimed yet -- this is the claim.
+            if not self._registry.try_occupy(name):
+                return "You can't talk to the player right now."
+            self._player_partner = name
+            self._begin_player_log(f"{name}_player")
+            invite = {"id": self._next_invite_id, "name": name, "opening": None}
+            self._next_invite_id += 1
+            self._player_invite = invite
+        self._start_player_export(agent)
+        self._last_activity[name] = "talking with the player"
+        if not self._submit(self._conversation_pool, self._open_player_conversation, name, invite["id"]):
+            self.end_conversation(name)
+            return "You can't talk to the player right now."
+        return None
+
+    def _open_player_conversation(self, name: str, invite_id: int) -> None:
+        """Worker thread: the NPC's opening line to the player."""
+        try:
+            agent = self._registry.get(name)
+            if agent is None:
+                return
+            stimulus = f"You've walked up to {agent.player_label()}. Say your opening line."
+            result = agent.respond(
+                stimulus,
+                scene=self._player_scene(agent, opening=True),
+                tags={"player"},
+                conversation=True,
+                with_player=True,
+                hide=CONVERSATION_ONLY_ACTIONS,
+            )
+            with self._player_lock:
+                current = self._player_invite
+                if current is None or current["id"] != invite_id:
+                    return  # the player already walked off
+            self._log_npc_reply(name, stimulus, result)
+            if result.utterance is None:
+                # Acted instead of speaking: nothing to open the panel on.
+                self.end_conversation(name)
+                self._last_activity[name] = self._describe(result)
+                return
+            self._record_player_line(agent, result.utterance)
+            with self._player_lock:
+                if self._player_invite is not None and self._player_invite["id"] == invite_id:
+                    self._player_invite["opening"] = result.utterance
+        except Exception:
+            log.exception("%s's opening line to the player failed", name)
+            self.end_conversation(name)
+
+    def _player_scene(self, agent: Agent, *, opening: bool = False) -> Scene:
+        who = agent.player_label()
+        situation = (
+            f"You've chosen to talk to {who}, who is right in front of you. Open the conversation."
+            if opening
+            else f"{who[0].upper()}{who[1:]} is talking with you directly, face to face."
+        )
+        base = self._scene(agent)
+        return Scene(time=base.time, context=f"{situation}\n{base.context}")
+
+    def _record_player_line(self, agent: Agent, utterance: str) -> None:
+        name = agent.identity.name
+        self._last_activity[name] = f"said to the player: {utterance}"
+        self._publish_speech(name, "player", utterance)
+        with self._export_lock:
+            export = self._player_export
+        if export is not None and export[1] == name:
+            # A no-op if the player already walked off mid-reply.
+            self._exporter.line(export[0], agent.identity, utterance)
+
     def end_conversation(self, name: str) -> None:
+        with self._player_lock:
+            if self._player_partner != name:
+                return
+            self._player_partner = None
+            self._player_log = None  # already on disk, line by line
+            if self._player_invite is not None and self._player_invite["name"] == name:
+                self._player_invite = None
         with self._export_lock:
             export = self._player_export
             if export is not None and export[1] == name:
@@ -1029,31 +1177,39 @@ class Simulation:
         agent = self._registry.get(name)
         if agent is None:
             return None
-        with self._export_lock:
-            export = self._player_export
-        if export is not None and export[1] != name:
-            export = None
-
-        scene = Scene(
-            time=f"{self._environment.clock} ({self._environment.time_of_day.value})",
-            context=(
-                f"The player has walked up and is speaking with you directly. "
-                f"It's {self._environment.weather.value} out."
-            ),
+        who = f"{agent.player_name} (the player)" if agent.player_name else "The player"
+        self._log_player_turn(
+            name, ConversationTurn(speaker=PLAYER_ID, listener=name, stimulus="", utterance=text, action=None)
         )
+        stimulus = f'{who} says: "{text}"'
         # conversation=True: the player is talking with them, so speaking
         # means answering, not thinking aloud (see Agent._speak_schema).
-        result = agent.respond(text, scene=scene, tags={"player"}, conversation=True)
-        self._last_activity[name] = self._describe(result)
+        # Attributed, like an NPC-to-NPC line: the stimulus is also what gets
+        # remembered, and a bare "go to the well -> Sure" read as small talk
+        # on later ticks rather than something the player asked for.
+        # No trades: the player has no inventory, so buy/sell could only
+        # fail -- and a failed tool call leaves the player with no reply.
+        result = agent.respond(
+            stimulus,
+            scene=self._player_scene(agent),
+            tags={"player"},
+            conversation=True,
+            with_player=True,
+            hide=CONVERSATION_ONLY_ACTIONS,
+        )
+        self._log_npc_reply(name, stimulus, result)
         if result.utterance is not None:
-            self._publish_speech(name, "player", result.utterance)
-            if export is not None:
-                # A no-op if the player already walked off mid-reply.
-                self._exporter.line(export[0], agent.identity, result.utterance)
+            self._record_player_line(agent, result.utterance)
+        else:
+            self._last_activity[name] = self._describe(result)
         return {
             "utterance": result.utterance,
             "action": None if result.action is None else {"name": result.action["name"]},
         }
+
+    def _current_invite(self) -> dict[str, Any] | None:
+        with self._player_lock:
+            return None if self._player_invite is None else dict(self._player_invite)
 
     def _describe(self, result: TurnResult) -> str:
         if result.utterance is not None:
@@ -1094,6 +1250,9 @@ class Simulation:
             "game_minutes_per_real_minute": self._game_minutes_per_real_minute(),
             "llm_calls_per_game_hour": self._llm_calls_per_game_hour,
             "llm_calls_per_real_minute": self._llm_calls_per_real_minute(),
+            # An NPC-started conversation with the player, while it lasts --
+            # the page opens its panel on seeing a new id.
+            "player_invite": self._current_invite(),
             "npcs": [
                 {
                     "name": agent.identity.name,

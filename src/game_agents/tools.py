@@ -10,6 +10,10 @@ class Tool:
     description: str
     parameters: dict[str, Any]  # JSON schema for the tool's arguments
     handler: Callable[..., Any]
+    # Looks something up without doing anything (e.g. look_around): its
+    # result is handed straight back and the NPC decides again, the same
+    # turn -- see Agent.respond(). An ordinary tool call ends the turn.
+    informational: bool = False
 
     def schema(self) -> dict[str, Any]:
         """Provider-neutral shape -- each LLMClient adapts this to whatever

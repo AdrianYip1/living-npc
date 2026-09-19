@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import tempfile
 import threading
@@ -487,6 +488,107 @@ class SimulationPlayerConversationTests(unittest.TestCase):
             self.assertIsNone(result["action"])
             [memory] = registry.get("Mara").memory.all()
             self.assertEqual(memory.tags, {"player"})
+
+    def test_say_offers_no_trades_the_player_could_never_complete(self):
+        class _ToolsLLM:
+            def complete(self, *, system, messages, tools):
+                self.tools = {t["name"] for t in tools}
+                return LLMResult(tool_call=ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "hi"}))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _ToolsLLM()
+            sim = Simulation(_registry(tmp, llm, names=("Mara",)), EnvironmentAgent(seed=1))
+
+            sim.say("Mara", "got anything to sell?")
+
+            self.assertIn(SPEAK_TOOL_NAME, llm.tools)
+            self.assertFalse({"buy_item", "sell_item"} & llm.tools)
+
+    def test_checking_inventory_still_answers_the_player(self):
+        class _CheckThenSpeakLLM:
+            def __init__(self):
+                self.messages = []
+
+            def complete(self, *, system, messages, tools):
+                self.messages.append(messages[0]["content"])
+                if len(self.messages) == 1:
+                    return LLMResult(tool_call=ToolCall(name="check_inventory", arguments={}))
+                return LLMResult(tool_call=ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "Horseshoes."}))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _CheckThenSpeakLLM()
+            sim = Simulation(_registry(tmp, llm, names=("Mara",)), EnvironmentAgent(seed=1))
+
+            result = sim.say("Mara", "what have you got on sale?")
+
+            self.assertEqual(result["utterance"], "Horseshoes.")
+            self.assertIn("(You check inventory: You have", llm.messages[1])
+
+    def test_every_turn_sees_the_player(self):
+        class _SystemLLM:
+            def complete(self, *, system, messages, tools):
+                self.system = system
+                return LLMResult(tool_call=ToolCall(name="wait", arguments={}))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _SystemLLM()
+            registry = _registry(tmp, llm, names=("Mara",))
+            registry.get("Mara").position = (0, 0)
+            sim = Simulation(registry, EnvironmentAgent(seed=1))
+            sim.set_player_position(90, 0)
+
+            sim.tick()
+            sim.wait_for_pending()
+
+            self.assertIn("the player (you don't know their name yet) at (90, 0)", llm.system)
+
+    def test_an_npc_can_start_a_conversation_with_the_player(self):
+        class _InviteLLM:
+            def complete(self, *, system, messages, tools):
+                if messages[0]["content"].startswith("It is now"):
+                    return LLMResult(tool_call=ToolCall(name="initiate_conversation", arguments={"target_name": "the player"}))
+                return LLMResult(tool_call=ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "Oi, you there."}))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, _InviteLLM(), names=("Mara", "Finn"))
+            registry.get("Mara").position = (0, 0)
+            registry.get("Finn").position = (-90, 90)  # too far to reach the player
+            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
+            sim.set_player_position(5, 0)
+
+            sim.tick()
+            sim.wait_for_pending()
+
+            invite = sim.state()["player_invite"]
+            self.assertEqual((invite["name"], invite["opening"]), ("Mara", "Oi, you there."))
+            self.assertTrue(registry.is_busy("Mara"))
+            self.assertFalse(sim.start_conversation("Finn"))  # one conversation at a time
+
+            sim.end_conversation("Mara")
+
+            self.assertIsNone(sim.state()["player_invite"])
+            self.assertFalse(registry.is_busy("Mara"))
+            self.assertTrue(sim.start_conversation("Finn"))
+
+    def test_player_conversation_is_saved_with_both_sides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp) / "log"
+            registry = _registry(tmp, MockLLMClient(), names=("Mara",), conversation_log_dir=log_dir)
+            sim = Simulation(registry, EnvironmentAgent(seed=1))
+            registry.add_traveler(_identity("Wren"), position=(0, 0))
+
+            for name in ("Mara", "Wren"):
+                sim.start_conversation(name)
+                sim.say(name, "hello there")
+                sim.end_conversation(name)
+            sim.say("Mara", "not in a conversation -- not logged")
+
+            for name in ("Mara", "Wren"):
+                [path] = log_dir.glob(f"player_{name}_*.json")
+                turns = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual([(t["speaker"], t["listener"]) for t in turns], [("player", name), (name, "player")])
+                self.assertEqual(turns[0]["utterance"], "hello there")
+                self.assertIn("hello there", turns[1]["utterance"])
 
     def test_say_returns_none_for_an_unknown_npc(self):
         with tempfile.TemporaryDirectory() as tmp:

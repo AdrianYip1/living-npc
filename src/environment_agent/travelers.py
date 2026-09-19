@@ -41,7 +41,21 @@ _REASONS = [
     "delivering a message",
     "just curious about the town",
 ]
-_TRAITS = ["weary", "guarded", "talkative", "well-dressed", "travel-worn", "watchful"]
+# Mostly warm, a few standoffish: with only "talkative" on the friendly
+# side, nearly every traveler arrived guarded and brushed the player off.
+_TRAITS = [
+    "friendly",
+    "curious",
+    "easygoing",
+    "helpful",
+    "talkative",
+    "good-humored",
+    "well-dressed",
+    "travel-worn",
+    "weary",
+    "guarded",
+    "watchful",
+]
 
 
 @dataclass

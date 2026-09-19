@@ -92,6 +92,41 @@ def render_places(places: list[dict]) -> str:
     return "Places in town you can walk to:\n" + "\n".join(lines)
 
 
+def render_residents(identities: list, places: list[dict]) -> str:
+    """Where each resident can usually be found -- general town knowledge,
+    not a live view: they move around, and look_around is how an NPC finds
+    out where someone actually is right now.
+    """
+    if not identities:
+        return ""
+    names = {tuple(place["position"]): place["name"] for place in places}
+
+    def spot(position) -> str:
+        position = tuple(position)
+        name = names.get(position)
+        return f"{name} ({position[0]}, {position[1]})" if name else f"({position[0]}, {position[1]})"
+
+    lines = [f"- {i.name}: works at {spot(i.workplace)}; lives at {spot(i.home)}." for i in identities]
+    return (
+        "Where the townsfolk can usually be found (they move around, so they won't always be there):\n"
+        + "\n".join(lines)
+    )
+
+
+def load_player_names(path: str | Path) -> dict[str, str]:
+    """NPC name -> what that NPC knows the player as."""
+    p = Path(path)
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def save_player_names(names: dict[str, str], path: str | Path) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(names, indent=2), encoding="utf-8")
+
+
 def load_memory(name: str, directory: str | Path) -> MemoryStore:
     """One file per NPC (`<name>.json`) rather than one shared file, so
     agents running concurrently later don't contend over the same file and
