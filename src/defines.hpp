@@ -30,4 +30,6 @@ namespace HTN {
 	using f32 = float;
 	using f64 = double;
 
+	const u32 MAX_FRAMES_IN_FLIGHT = 2;
+
 } // namespace HTN
