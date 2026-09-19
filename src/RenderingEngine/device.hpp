@@ -50,6 +50,10 @@ namespace HTN {
 		// Getter functions
 		VkInstance getInstance() const { return instance; }
 		VkSurfaceKHR getSurface() const { return surface; }
+		VkPhysicalDevice getPhysicalDevice() const { return physicalDevice; }
+		VkDevice getDevice() const { return device; }
+		VkQueue getGraphicsQueue() const { return graphicsQueue; }
+		VkQueue getPresentQueue() const { return presentQueue; }
 
 		SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
 		QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
