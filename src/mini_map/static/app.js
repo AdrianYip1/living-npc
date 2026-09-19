@@ -1,18 +1,20 @@
-// UI shell only -- no backend wired up yet. The scrolling grid and player
-// dot are a placeholder world so the camera-follow behavior is visible;
-// WASD/arrow keys drive it directly for now and will be replaced once a
-// real player position comes from the backend. Status values, play/pause,
-// mic-hold, and the conversation log are likewise local-only.
+// The scrolling grid and player dot are still a local placeholder -- WASD/
+// arrow keys drive the player directly, and will be replaced once a real
+// player position comes from the backend. Play/pause, mic-hold, and the
+// conversation log are likewise still local-only.
 //
-// NPCs are drawn at random fixed positions purely to preview the visual --
-// they don't move yet. Once game_agents can drive them, each NPC's
-// position will come from its own LLM-controlled agent instead of
-// spawnNPCs().
+// NPCs, though, are real: their positions come from polling /api/state on
+// the mini_map server, which runs game_agents' NPCRegistry behind an
+// autonomous time-of-day tick loop (see mini_map/simulation.py). Backend
+// coordinates run -100..100 on each axis (see game_agents/world.py);
+// WORLD_SCALE below maps that onto this canvas's own (larger, arbitrary)
+// world-unit space.
 //
-// Travelers are a second, separate category: instead of all spawning at
-// once at start, one drifts in from a random map edge every so often,
-// fades in, walks a straight placeholder line across the map, and is
-// removed the moment it crosses back outside the map bounds.
+// Travelers are still a separate, client-only placeholder category: one
+// drifts in from a random map edge every so often, fades in, walks a
+// straight placeholder line across the map, and is removed the moment it
+// crosses back outside the map bounds. Spawning real travelers from the
+// environment agent is a natural next step, not done yet.
 
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
@@ -25,7 +27,6 @@ const MAP_HALF = MAP_SIZE / 2;
 const MAX_SPEED = 260; // world px/sec
 const ACCEL = 900; // px/sec^2 while a move key is held
 const DECEL = 1400; // px/sec^2 once keys are released
-const NPC_NAMES = ["Mira", "Talon", "Yuki", "Bram", "Sable"];
 const NPC_COLORS = ["#e91e63", "#2196f3", "#ff9800", "#9c27b0", "#00bcd4"];
 const TRAVELER_NAMES = ["Doran", "Kestrel", "Wren", "Fennic", "Ilsa", "Orin"];
 const TRAVELER_SPEED = 70; // world units/sec
@@ -33,7 +34,12 @@ const TRAVELER_FADE_SECONDS = 1.2;
 const TRAVELER_SPAWN_MIN_MS = 6000;
 const TRAVELER_SPAWN_MAX_MS = 14000;
 const MAX_TRAVELERS = 3;
+const GAME_BOUND = 100; // matches game_agents/world.py's MAP_MIN/MAX
+const WORLD_SCALE = MAP_HALF / GAME_BOUND; // backend coord -> canvas world unit
+const STATE_POLL_MS = 2000;
 
+const statusTime = document.getElementById("status-time");
+const statusWeather = document.getElementById("status-weather");
 const statusPlaystate = document.getElementById("status-playstate");
 const statusMic = document.getElementById("status-mic");
 const conversationEl = document.getElementById("conversation");
@@ -64,23 +70,62 @@ const velocity = { x: 0, y: 0 };
 // last-faced direction once the player coasts to a stop.
 let facingAngle = -Math.PI / 2; // start facing up
 
-function spawnNPCs() {
-  const count = 2 + Math.floor(Math.random() * 2); // 2 or 3
-  const margin = 100;
-  const names = [...NPC_NAMES].sort(() => Math.random() - 0.5);
-  const npcs = [];
-  for (let i = 0; i < count; i++) {
-    npcs.push({
-      name: names[i],
-      color: NPC_COLORS[i % NPC_COLORS.length],
-      x: (Math.random() * 2 - 1) * (MAP_HALF - margin),
-      y: (Math.random() * 2 - 1) * (MAP_HALF - margin),
-    });
+// Real NPCs, kept live by polling /api/state. Colors are assigned once per
+// name (on first sighting) and then held stable across polls, since the
+// backend doesn't send one -- npcColors persists that assignment even
+// though the npc objects themselves get replaced each poll.
+const npcs = [];
+const npcColors = new Map();
+
+function colorFor(name) {
+  if (!npcColors.has(name)) {
+    npcColors.set(name, NPC_COLORS[npcColors.size % NPC_COLORS.length]);
   }
-  return npcs;
+  return npcColors.get(name);
 }
 
-const npcs = spawnNPCs();
+function applyState(data) {
+  if (typeof data.time_of_day === "string") {
+    statusTime.textContent = data.time_of_day;
+  }
+  if (typeof data.weather === "string") {
+    statusWeather.textContent = data.weather;
+  }
+
+  const byName = new Map(npcs.map((npc) => [npc.name, npc]));
+  npcs.length = 0;
+  for (const entry of data.npcs || []) {
+    const existing = byName.get(entry.name);
+    const npc = existing || { name: entry.name, color: colorFor(entry.name) };
+    npc.x = entry.x * WORLD_SCALE;
+    npc.y = entry.y * WORLD_SCALE;
+    npc.busy = entry.busy;
+    npc.activity = entry.activity;
+    npcs.push(npc);
+  }
+
+  if (nearbyNPC && !npcs.includes(nearbyNPC)) {
+    nearbyNPC = null;
+  }
+}
+
+let statePollFailed = false;
+
+async function pollState() {
+  try {
+    const response = await fetch("/api/state");
+    if (!response.ok) {
+      throw new Error(`status ${response.status}`);
+    }
+    applyState(await response.json());
+    statePollFailed = false;
+  } catch (err) {
+    if (!statePollFailed) {
+      appendLogLine(`Lost connection to the backend (${err.message}). Retrying...`, { system: true });
+      statePollFailed = true;
+    }
+  }
+}
 
 // Traveler NPCs come and go over time, unlike the persistent npcs above.
 // Mutated in place by spawnTraveler() (push) and tick() (splice on exit).
@@ -127,6 +172,7 @@ function spawnTraveler() {
   travelers.push({
     name: pool[Math.floor(Math.random() * pool.length)],
     color: NPC_COLORS[Math.floor(Math.random() * NPC_COLORS.length)],
+    isTraveler: true, // no backend counterpart -- conversation panel stays local-only for these
     x,
     y,
     vx: Math.cos(angle) * speed,
@@ -379,7 +425,7 @@ function updateNearbyNPC() {
     }
   }
   nearbyNPC = closest;
-  proximityHint.classList.toggle("hidden", !nearbyNPC || state.conversationOpen);
+  proximityHint.classList.toggle("hidden", !nearbyNPC || nearbyNPC.busy || state.conversationOpen);
 }
 
 function setPaused(paused) {
@@ -404,20 +450,65 @@ function appendLogLine(text, { system = false } = {}) {
 
 let conversationPartner = null;
 
-function openConversation(npc) {
+async function postJSON(path, body) {
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// Real NPCs (not travelers -- they have no backend counterpart to claim
+// busy state on) go through the server to actually start the exchange:
+// this is the same busy claim the world tick and NPC-to-NPC conversations
+// use, so a real conversation locks this NPC out of autonomous behavior
+// for as long as the panel stays open, exactly like being mid-exchange
+// with another NPC would.
+async function openConversation(npc) {
   state.conversationOpen = true;
   conversationPartner = npc;
   conversationTarget.textContent = `Talking to ${npc.name}`;
   conversationEl.classList.remove("hidden");
   proximityHint.classList.add("hidden");
+  conversationLog.innerHTML = "";
   conversationInput.focus();
+
+  if (!npc.isTraveler) {
+    let ok = false;
+    try {
+      const response = await postJSON("/api/conversation/start", { name: npc.name });
+      ok = response.ok;
+    } catch (err) {
+      ok = false;
+    }
+    if (!ok) {
+      appendLogLine(`${npc.name} is busy right now.`, { system: true });
+      closeConversation();
+    }
+  }
 }
 
 function closeConversation() {
   state.conversationOpen = false;
+  const npc = conversationPartner;
   conversationPartner = null;
   conversationEl.classList.add("hidden");
   conversationInput.blur();
+  if (npc && !npc.isTraveler) {
+    postJSON("/api/conversation/end", { name: npc.name }).catch(() => {});
+  }
+}
+
+function setConversationBusy(busy) {
+  conversationInput.disabled = busy;
+  conversationForm.querySelector("button").disabled = busy;
+}
+
+function describeAction(action) {
+  if (action.name === "move_to") return "walks off";
+  if (action.name === "wait") return "doesn't answer";
+  if (action.name === "initiate_conversation") return "turns to talk to someone else";
+  return action.name;
 }
 
 function isTypingTarget(target) {
@@ -491,18 +582,45 @@ conversationInput.addEventListener("keydown", (event) => {
   }
 });
 
-conversationForm.addEventListener("submit", (event) => {
+conversationForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = conversationInput.value.trim();
-  if (!text) {
+  const npc = conversationPartner;
+  if (!text || !npc) {
     return;
   }
   appendLogLine(`> ${text}`);
   conversationInput.value = "";
   resizeConversationInput();
+
+  if (npc.isTraveler) {
+    return; // no backend counterpart -- stays a local echo, as before
+  }
+
+  setConversationBusy(true);
+  try {
+    const response = await postJSON("/api/conversation/say", { name: npc.name, text });
+    if (!response.ok) {
+      appendLogLine(`${npc.name} didn't respond.`, { system: true });
+      return;
+    }
+    const data = await response.json();
+    if (data.utterance) {
+      appendLogLine(`${npc.name}: ${data.utterance}`);
+    } else if (data.action) {
+      appendLogLine(`* ${npc.name} ${describeAction(data.action)} *`, { system: true });
+    }
+  } catch (err) {
+    appendLogLine(`Lost connection while talking to ${npc.name}.`, { system: true });
+  } finally {
+    setConversationBusy(false);
+    conversationInput.focus();
+  }
 });
 
-appendLogLine("Backend not connected yet -- input is only echoed locally.", { system: true });
+appendLogLine("Connecting to the living-npc backend...", { system: true });
 resizeCanvas();
 requestAnimationFrame(tick);
 scheduleNextTraveler();
+pollState();
+setInterval(pollState, STATE_POLL_MS);

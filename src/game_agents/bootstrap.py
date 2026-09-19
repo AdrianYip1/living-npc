@@ -1,0 +1,72 @@
+"""Shared construction logic for every entry point that needs a live
+NPCRegistry (the CLI in __main__.py, the mini-map server in
+mini_map/game.py) -- kept in one place so both build the same NPCs, tools,
+and data paths instead of drifting apart.
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from .llm import AnthropicLLMClient, DeepSeekLLMClient, LLMClient, MockLLMClient
+from .registry import NPCRegistry
+from .tools import Tool, ToolRegistry
+
+DATA_DIR = Path(__file__).parent / "data"
+NPCS_PATH = DATA_DIR / "npcs.json"
+MEMORY_DIR = DATA_DIR / "memory"
+INSTRUCTIONS_PATH = DATA_DIR / "instructions.json"
+CONVERSATION_LOG_DIR = DATA_DIR / "conversation_log"
+
+_BACKENDS: dict[str, type[LLMClient]] = {
+    "mock": MockLLMClient,
+    "anthropic": AnthropicLLMClient,
+    "deepseek": DeepSeekLLMClient,
+}
+
+load_dotenv(Path(__file__).parent / ".env")
+
+
+def _wave_handler(target: str) -> str:
+    print(f"  [action] waves at {target}")
+    return "waved"
+
+
+def _build_llm() -> tuple[LLMClient, str]:
+    name = os.environ.get("GAME_AGENTS_LLM", "mock")
+    backend_cls = _BACKENDS.get(name)
+    if backend_cls is None:
+        raise ValueError(f"unknown GAME_AGENTS_LLM={name!r}, expected one of {sorted(_BACKENDS)}")
+    model = os.environ.get("GAME_AGENTS_MODEL")
+    kwargs = {"model": model} if model and name != "mock" else {}
+    return backend_cls(**kwargs), name
+
+
+def build_registry() -> tuple[NPCRegistry, str]:
+    tools = ToolRegistry()
+    tools.register(
+        Tool(
+            name="wave",
+            description="Wave at someone",
+            parameters={
+                "type": "object",
+                "properties": {"target": {"type": "string"}},
+                "required": ["target"],
+            },
+            handler=_wave_handler,
+        )
+    )
+    llm, backend = _build_llm()
+    return (
+        NPCRegistry(
+            NPCS_PATH,
+            MEMORY_DIR,
+            llm,
+            tools,
+            instructions_path=INSTRUCTIONS_PATH,
+            conversation_log_dir=CONVERSATION_LOG_DIR,
+        ),
+        backend,
+    )

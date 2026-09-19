@@ -8,7 +8,8 @@ from .conversation import run_conversation, save_transcript
 from .identity import DEFAULT_PROFILE_TEMPLATE
 from .llm import LLMClient
 from .storage import load_identities, load_instructions, load_memory, load_profile_template, save_memory
-from .tools import Tool, ToolRegistry
+from .tools import Tool, ToolRegistry, make_wait_tool
+from .world import clamp_coordinate
 
 
 class NPCRegistry:
@@ -49,8 +50,16 @@ class NPCRegistry:
             for tool in common_tools:
                 npc_tools.register(tool)
             npc_tools.register(self._make_initiate_conversation_tool(identity.name, conversation_turns))
+            npc_tools.register(self._make_move_tool(identity.name))
+            npc_tools.register(make_wait_tool())
             self._agents[identity.name] = Agent(
-                identity, llm, npc_tools, memory=memory, instructions=instructions, profile_template=profile_template
+                identity,
+                llm,
+                npc_tools,
+                memory=memory,
+                instructions=instructions,
+                profile_template=profile_template,
+                position=identity.home,
             )
 
     def get(self, name: str) -> Agent | None:
@@ -87,6 +96,18 @@ class NPCRegistry:
         self._busy.discard(a_name)
         self._busy.discard(b_name)
 
+    def try_occupy(self, name: str) -> bool:
+        """Single-participant version of try_occupy_pair -- for a
+        conversation with the player, who isn't an NPC in this registry and
+        so has no second name to pair against. Reuses the same busy set, so
+        an NPC talking to the player is exactly as unavailable for
+        NPC-to-NPC conversation or a world tick as one already mid-exchange.
+        """
+        return self.try_occupy_pair(name, name)
+
+    def release(self, name: str) -> None:
+        self.release_pair(name, name)
+
     # ------------------------------------------------------------------ #
     def _make_initiate_conversation_tool(self, initiator_name: str, turns: int) -> Tool:
         def handler(target_name: str) -> str:
@@ -121,6 +142,29 @@ class NPCRegistry:
             handler=handler,
         )
 
+    def _make_move_tool(self, name: str) -> Tool:
+        def handler(x: int, y: int) -> str:
+            clamped = (clamp_coordinate(int(x)), clamp_coordinate(int(y)))
+            self._agents[name].position = clamped
+            return f"You walk to ({clamped[0]}, {clamped[1]})."
+
+        return Tool(
+            name="move_to",
+            description=(
+                "Walk to a specific spot on the map. Coordinates run from -100 to 100 on both "
+                "axes; anything outside that range is clamped to the nearest edge."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer", "description": "Target x coordinate, from -100 to 100."},
+                    "y": {"type": "integer", "description": "Target y coordinate, from -100 to 100."},
+                },
+                "required": ["x", "y"],
+            },
+            handler=handler,
+        )
+
     def _resolve(self, target: str) -> Agent | None:
         """Exact name match first; falls back to a case-insensitive match,
         since the LLM won't always reproduce a name's exact capitalization.
@@ -133,3 +177,13 @@ class NPCRegistry:
             if candidate.identity.name.lower() == lowered:
                 return candidate
         return None
+
+    def resolve(self, target: str) -> str | None:
+        """Public, name-only version of _resolve() -- lets a caller outside
+        the registry (the world tick loop) find out who an
+        initiate_conversation call actually landed on, by canonical name,
+        without reaching into a private method or an Agent it doesn't
+        otherwise need.
+        """
+        agent = self._resolve(target)
+        return agent.identity.name if agent is not None else None

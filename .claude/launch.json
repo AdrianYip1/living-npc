@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mini-map",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "mini_map.game"],
+      "cwd": "src",
+      "port": 8765
+    }
+  ]
+}

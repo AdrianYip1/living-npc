@@ -46,6 +46,7 @@ class Agent:
         memory: MemoryStore | None = None,
         instructions: str = "",
         profile_template: str = DEFAULT_PROFILE_TEMPLATE,
+        position: tuple[int, int] | None = None,
     ) -> None:
         self.identity = identity
         self.memory = memory if memory is not None else MemoryStore()
@@ -53,6 +54,9 @@ class Agent:
         self.tools = tools or ToolRegistry()
         self.instructions = instructions
         self.profile_template = profile_template
+        # Dynamic, unlike home/workplace on Identity -- spawns at home and
+        # changes as the move tool (see registry.py) is used.
+        self.position = position if position is not None else identity.home
 
     def respond(self, stimulus: str, *, scene: Scene | None = None, tags: set[str] | None = None) -> TurnResult:
         scene = scene or Scene()
@@ -84,6 +88,7 @@ class Agent:
         if self.instructions:
             parts.append(self.instructions)
         parts.append(self.identity.prompt_block(self.profile_template))
+        parts.append(f"You are currently at ({self.position[0]}, {self.position[1]}).")
         scene_block = scene.prompt_block()
         if scene_block:
             parts.append(scene_block)

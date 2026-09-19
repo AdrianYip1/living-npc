@@ -20,6 +20,7 @@ from game_agents.storage import (
     save_memory,
 )
 from game_agents.tools import Tool, ToolRegistry
+from game_agents.world import MAP_MAX, MAP_MIN, clamp_coordinate
 
 
 def _identity(name: str) -> Identity:
@@ -66,6 +67,43 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertNotIn("Alice paid her tab", bob_ctx)
 
 
+class IdentityProfileTests(unittest.TestCase):
+    def test_prompt_block_includes_home_workplace_and_habits(self):
+        identity = Identity(
+            name="Mara",
+            traits=[],
+            backstory="",
+            speech_style="",
+            home=(-40, 15),
+            workplace=(12, -30),
+            habits=["Goes to the forge each morning", "Returns home at dusk"],
+        )
+        block = identity.prompt_block()
+
+        self.assertIn("Home: (-40, 15)", block)
+        self.assertIn("Workplace: (12, -30)", block)
+        self.assertIn("Habits: Goes to the forge each morning; Returns home at dusk", block)
+
+    def test_default_home_workplace_and_empty_habits(self):
+        identity = _identity("Mara")
+        block = identity.prompt_block()
+
+        self.assertIn("Home: (0, 0)", block)
+        self.assertIn("Workplace: (0, 0)", block)
+        self.assertIn("Habits: none", block)
+
+
+class WorldBoundsTests(unittest.TestCase):
+    def test_clamp_leaves_in_range_values_untouched(self):
+        self.assertEqual(clamp_coordinate(0), 0)
+        self.assertEqual(clamp_coordinate(MAP_MIN), MAP_MIN)
+        self.assertEqual(clamp_coordinate(MAP_MAX), MAP_MAX)
+
+    def test_clamp_pulls_out_of_range_values_to_the_nearest_edge(self):
+        self.assertEqual(clamp_coordinate(MAP_MAX + 50), MAP_MAX)
+        self.assertEqual(clamp_coordinate(MAP_MIN - 50), MAP_MIN)
+
+
 class StorageRoundTripTests(unittest.TestCase):
     def test_identity_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -77,6 +115,9 @@ class StorageRoundTripTests(unittest.TestCase):
                     backstory="runs the forge",
                     speech_style="dry",
                     goals=["finish the order"],
+                    home=(-40, 15),
+                    workplace=(12, -30),
+                    habits=["Goes to the forge each morning"],
                 )
             ]
             save_identities(original, path)
@@ -141,6 +182,22 @@ class RegistryTests(unittest.TestCase):
             save_identities([], npcs_path)
             registry = NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient())
             self.assertIsNone(registry.get("Nobody"))
+
+
+class AgentPositionTests(unittest.TestCase):
+    def test_spawns_at_identity_home_by_default(self):
+        identity = _identity("Mara")
+        identity.home = (-40, 15)
+        agent = Agent(identity, MockLLMClient())
+
+        self.assertEqual(agent.position, (-40, 15))
+
+    def test_explicit_position_overrides_home(self):
+        identity = _identity("Mara")
+        identity.home = (-40, 15)
+        agent = Agent(identity, MockLLMClient(), position=(3, 4))
+
+        self.assertEqual(agent.position, (3, 4))
 
 
 class AgentTurnTests(unittest.TestCase):
@@ -253,6 +310,15 @@ class SystemPromptTests(unittest.TestCase):
 
         self.assertIn("Location: the forge", recorder.last_system)
 
+    def test_current_position_is_included(self):
+        identity = _identity("Mara")
+        identity.home = (7, -8)
+        recorder = _RecordingLLM()
+        agent = Agent(identity, recorder)
+        agent.respond("hi")
+
+        self.assertIn("You are currently at (7, -8).", recorder.last_system)
+
     def test_custom_profile_template_is_used(self):
         recorder = _RecordingLLM()
         agent = Agent(_identity("Mara"), recorder, profile_template="{name} the blacksmith")
@@ -341,7 +407,7 @@ class InitiateConversationToolTests(unittest.TestCase):
             registry = self._registry(tmp, names=("Mara",), tools=common)
 
             names = {t.name for t in registry.get("Mara").tools.all_tools()}
-            self.assertEqual(names, {"initiate_conversation", "wave"})
+            self.assertEqual(names, {"initiate_conversation", "move_to", "wait", "wave"})
 
     def test_initiate_conversation_runs_an_exchange_and_releases_busy_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -385,6 +451,105 @@ class InitiateConversationToolTests(unittest.TestCase):
             self.assertIn("Finn", result)
             self.assertNotIn("no one", result)
             self.assertEqual(len(registry.get("Finn").memory.all()), 1)
+
+
+class MoveToolTests(unittest.TestCase):
+    """The registry-built move_to tool: updates the specific NPC's own
+    position and clamps out-of-range requests to the map's edges, wired
+    through Agent.tools.execute() directly, same as InitiateConversationToolTests.
+    """
+
+    def _registry(self, tmp, *, names=("Mara", "Finn"), **kwargs):
+        npcs_path = Path(tmp) / "npcs.json"
+        save_identities([_identity(n) for n in names], npcs_path)
+        return NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient(), **kwargs)
+
+    def test_moves_to_the_requested_coordinate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, names=("Mara",))
+
+            result = registry.get("Mara").tools.execute("move_to", {"x": 30, "y": -20})
+
+            self.assertIn("(30, -20)", result)
+            self.assertEqual(registry.get("Mara").position, (30, -20))
+
+    def test_clamps_out_of_range_coordinates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, names=("Mara",))
+
+            registry.get("Mara").tools.execute("move_to", {"x": 500, "y": -500})
+
+            self.assertEqual(registry.get("Mara").position, (100, -100))
+
+    def test_only_moves_the_calling_npc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp)
+
+            registry.get("Mara").tools.execute("move_to", {"x": 10, "y": 10})
+
+            self.assertEqual(registry.get("Mara").position, (10, 10))
+            self.assertEqual(registry.get("Finn").position, (0, 0))  # default home, untouched
+
+
+class WaitToolTests(unittest.TestCase):
+    def test_every_npc_can_wait_and_it_is_a_true_no_op(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            npcs_path = Path(tmp) / "npcs.json"
+            save_identities([_identity("Mara")], npcs_path)
+            registry = NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient())
+
+            result = registry.get("Mara").tools.execute("wait", {})
+
+            self.assertIsInstance(result, str)
+            self.assertEqual(registry.get("Mara").position, (0, 0))
+
+
+class SingleNameBusyTests(unittest.TestCase):
+    """try_occupy/release: the player-conversation busy claim (see
+    mini_map.simulation.Simulation), reusing try_occupy_pair/release_pair
+    with the same name on both sides.
+    """
+
+    def _registry(self, tmp, names=("Mara", "Finn")):
+        npcs_path = Path(tmp) / "npcs.json"
+        save_identities([_identity(n) for n in names], npcs_path)
+        return NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient())
+
+    def test_occupy_marks_busy_and_release_frees_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, names=("Mara",))
+
+            self.assertTrue(registry.try_occupy("Mara"))
+            self.assertTrue(registry.is_busy("Mara"))
+
+            registry.release("Mara")
+            self.assertFalse(registry.is_busy("Mara"))
+
+    def test_cannot_occupy_an_already_busy_npc(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, names=("Mara", "Finn"))
+            registry.try_occupy_pair("Mara", "Finn")
+
+            self.assertFalse(registry.try_occupy("Mara"))
+
+    def test_single_occupy_also_blocks_pair_occupy_and_vice_versa(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, names=("Mara", "Finn"))
+            registry.try_occupy("Mara")
+
+            self.assertFalse(registry.try_occupy_pair("Mara", "Finn"))
+
+
+class ResolveTests(unittest.TestCase):
+    def test_resolves_exact_and_case_insensitive_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            npcs_path = Path(tmp) / "npcs.json"
+            save_identities([_identity("Mara")], npcs_path)
+            registry = NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient())
+
+            self.assertEqual(registry.resolve("Mara"), "Mara")
+            self.assertEqual(registry.resolve("mara"), "Mara")
+            self.assertIsNone(registry.resolve("Nobody"))
 
 
 class ConversationLoggingTests(unittest.TestCase):

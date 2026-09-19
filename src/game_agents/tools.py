@@ -49,3 +49,22 @@ class ToolRegistry:
         if tool is None:
             raise KeyError(f"no tool registered as {name!r}")
         return tool.handler(**arguments)
+
+
+def make_wait_tool() -> Tool:
+    """A deliberate no-op. Without this, an autonomous tick (see
+    mini_map.simulation.Simulation) forces every idle NPC to either move or
+    speak to no one every time it's stimulated -- staying put is just as
+    valid a choice as acting, so it needs to be an option on the same
+    footing as any other tool, not something implied by ignoring a turn.
+    """
+
+    def handler() -> str:
+        return "You stay where you are and keep doing what you were doing."
+
+    return Tool(
+        name="wait",
+        description="Do nothing for the moment -- stay put and keep doing whatever you're already doing.",
+        parameters={"type": "object", "properties": {}},
+        handler=handler,
+    )

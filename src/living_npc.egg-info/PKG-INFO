@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: living-npc
+Version: 0.0.1
+Requires-Python: >=3.10
+Requires-Dist: anthropic>=0.34
+Requires-Dist: openai>=1.0
+Requires-Dist: python-dotenv>=1.0

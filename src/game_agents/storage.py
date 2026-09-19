@@ -6,7 +6,8 @@ from pathlib import Path
 from .identity import Identity
 from .memory import MemoryStore
 
-_IDENTITY_FIELDS = ("name", "traits", "backstory", "speech_style", "goals")
+_IDENTITY_FIELDS = ("name", "traits", "backstory", "speech_style", "goals", "home", "workplace", "habits")
+_COORD_FIELDS = ("home", "workplace")
 
 
 def load_identities(path: str | Path) -> list[Identity]:
@@ -14,13 +15,24 @@ def load_identities(path: str | Path) -> list[Identity]:
     if not p.exists():
         return []
     records = json.loads(p.read_text(encoding="utf-8"))
-    return [Identity(**record) for record in records]
+    identities = []
+    for record in records:
+        for coord_field in _COORD_FIELDS:
+            if coord_field in record:
+                record[coord_field] = tuple(record[coord_field])
+        identities.append(Identity(**record))
+    return identities
 
 
 def save_identities(identities: list[Identity], path: str | Path) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    records = [{field: getattr(identity, field) for field in _IDENTITY_FIELDS} for identity in identities]
+    records = []
+    for identity in identities:
+        record = {field: getattr(identity, field) for field in _IDENTITY_FIELDS}
+        for coord_field in _COORD_FIELDS:
+            record[coord_field] = list(record[coord_field])
+        records.append(record)
     p.write_text(json.dumps(records, indent=2), encoding="utf-8")
 
 
