@@ -21,6 +21,7 @@ namespace HTN {
 		alignas(16) enginemath::Vec3 position = enginemath::Vec3(0.0f);
 		alignas(16) enginemath::Vec3 direction = enginemath::Vec3(1.0f);
 		alignas(16) enginemath::Vec3 color = enginemath::Vec3(1.0f);
+		enginemath::Mat4 lightViewProj = enginemath::Mat4::identity();
 	};
 
 	class Uniform {
