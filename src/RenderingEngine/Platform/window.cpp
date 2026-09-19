@@ -20,9 +20,7 @@ void HTN::Window::initWindow() {
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-	GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-	const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-	window = glfwCreateWindow(mode->width, mode->height, TITLE, monitor, nullptr);
+	window = glfwCreateWindow(W, H, TITLE, nullptr, nullptr);
 
 	if (!window) {
 		throw std::runtime_error("ERROR: Failed to create window");
