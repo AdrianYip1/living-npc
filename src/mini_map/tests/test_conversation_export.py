@@ -96,7 +96,7 @@ class NpcConversationExportTests(unittest.TestCase):
                 time.sleep(0.01)
                 sim.update_active_conversation()
             [path] = _files(log)
-            self.assertEqual(_pointer(log), {"conversation": path.name, "speakers": ["Mara", "Finn"]})
+            self.assertEqual(_pointer(log), {"conversation": path.name, "speakers": ["Mara", "Finn"], "seq": 0})
 
             gate.set()
             sim.wait_for_pending()
@@ -121,7 +121,7 @@ class PlayerConversationExportTests(unittest.TestCase):
             sim.say("Finn", "hello there")
             sim.update_active_conversation()
             [path] = _files(log)
-            self.assertEqual(_pointer(log), {"conversation": path.name, "speakers": ["Finn"]})
+            self.assertEqual(_pointer(log), {"conversation": path.name, "speakers": ["Finn"], "seq": 0})
 
             sim.end_conversation("Finn")
             sim.say("Finn", "one more thing")  # after leaving: not exported
@@ -138,6 +138,107 @@ class PlayerConversationExportTests(unittest.TestCase):
             )
             sim.update_active_conversation()
             self.assertEqual(_pointer(log), {"conversation": None, "speakers": []})
+
+
+class NpcStateExportTests(unittest.TestCase):
+    def test_every_npc_gets_a_slot_and_keeps_facing_its_last_movement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "log"
+            registry = _registry(tmp, _MutterLLM())
+            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False, exporter=ConversationExporter(log))
+            mara, finn = registry.get("Mara"), registry.get("Finn")
+            mara.position, finn.position = (-100.0, 0.0), (100.0, 100.0)
+            mara.velocity = (-5.0, 0.0)
+            sim.export_npc_state()
+            mara.velocity = (0.0, 0.0)  # stopped: still faces -x
+            sim.export_npc_state()
+            state = json.loads((log / "npc_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                state,
+                {"npcs": [
+                    {"slot": 0, "x": 0.0, "z": 0.5, "rot": -1.571},
+                    {"slot": 1, "x": 1.0, "z": 1.0, "rot": 0.0},
+                ]},
+            )
+
+
+class SpeechPacingTests(unittest.TestCase):
+    """While the speech side voices a conversation, a line waits for the
+    previous one to be spoken rather than for its reading time.
+    """
+
+    def _sim(self, tmp) -> Simulation:
+        return Simulation(_registry(tmp, _MutterLLM()), EnvironmentAgent(seed=1), exporter=ConversationExporter(Path(tmp) / "log"))
+
+    def _time(self, sim: Simulation, answers: list[bool | None], **kwargs) -> float:
+        start = time.monotonic()
+        sim._hold_until(start + 0.3, spoken=lambda: answers.pop(0) if len(answers) > 1 else answers[0], **kwargs)
+        return time.monotonic() - start
+
+    def test_spoken_ends_the_wait_before_the_reading_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertLess(self._time(self._sim(tmp), [True], speech_deadline=time.monotonic() + 5), 0.2)
+
+    def test_not_yet_spoken_waits_past_the_reading_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            elapsed = self._time(self._sim(tmp), [False] * 12 + [True], speech_deadline=time.monotonic() + 5)
+            self.assertGreater(elapsed, 0.5)
+            self.assertLess(elapsed, 2)
+
+    def test_not_yet_spoken_gives_up_at_the_speech_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            elapsed = self._time(self._sim(tmp), [False], speech_deadline=time.monotonic() + 0.6)
+            self.assertGreater(elapsed, 0.5)
+            self.assertLess(elapsed, 2)
+
+    def test_nobody_voicing_it_falls_back_to_the_reading_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            elapsed = self._time(self._sim(tmp), [None], speech_deadline=time.monotonic() + 5)
+            self.assertGreater(elapsed, 0.25)
+            self.assertLess(elapsed, 1)
+
+    def test_a_voiced_conversation_is_paced_by_the_speech_side(self):
+        """A fake speech side voices each line in 0.1 s. Reading time is
+        made huge, so the exchange only finishes quickly if the acks drive it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "log"
+            sim = Simulation(_registry(tmp, _ChatLLM()), EnvironmentAgent(seed=1), exporter=ConversationExporter(log))
+            sim.MIN_LINE_SECONDS = sim.MAX_LINE_SECONDS = 30.0
+            voiced: list[tuple[str, int]] = []
+            stop = threading.Event()
+
+            def speech_side() -> None:
+                ack = ("", -1)
+                while not stop.is_set():
+                    sim.update_active_conversation()
+                    pointer = _pointer(log) if (log / "active.json").exists() else {}
+                    name = pointer.get("conversation")
+                    if name:
+                        for line in _read(log / name)[1:]:
+                            if line["text"] and (name, line["seq"]) not in voiced and line["seq"] >= pointer["seq"]:
+                                time.sleep(0.1)
+                                voiced.append((name, line["seq"]))
+                                ack = (name, line["seq"])
+                                break
+                    tmp_ack = log / "spoken.json.tmp"
+                    tmp_ack.write_text(json.dumps({"conversation": ack[0], "seq": ack[1]}), encoding="utf-8")
+                    tmp_ack.replace(log / "spoken.json")
+                    time.sleep(0.02)
+
+            log.mkdir(parents=True)
+            worker = threading.Thread(target=speech_side, daemon=True)
+            worker.start()
+            try:
+                start = time.monotonic()
+                sim.tick()
+                sim.wait_for_pending()
+                elapsed = time.monotonic() - start
+            finally:
+                stop.set()
+                worker.join()
+            self.assertLess(elapsed, 10)
+            self.assertEqual([seq for _, seq in voiced], [0, 1, 2, 3, 4])
 
 
 if __name__ == "__main__":

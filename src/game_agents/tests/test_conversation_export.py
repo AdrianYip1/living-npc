@@ -4,7 +4,9 @@ animation program -- these pin its exact shape.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from game_agents.conversation_export import (
     PLAYER_PARTICIPANT,
     ConversationExporter,
     npc_participant,
+    npc_state_entry,
     sanitize_for_speech,
 )
 from game_agents.identity import Identity
@@ -135,7 +138,7 @@ class PointerTests(unittest.TestCase):
             exporter.point_at("conv_Mara_Finn_1", ["Mara", "Finn"])
             self.assertEqual(
                 json.loads((Path(tmp) / "active.json").read_text(encoding="utf-8")),
-                {"conversation": "conv_Mara_Finn_1.jsonl", "speakers": ["Mara", "Finn"]},
+                {"conversation": "conv_Mara_Finn_1.jsonl", "speakers": ["Mara", "Finn"], "seq": 0},
             )
             exporter.point_at(None, ["ignored"])
             self.assertEqual(
@@ -163,6 +166,115 @@ class PointerTests(unittest.TestCase):
                 replay_like_renderer(Path(tmp)),
                 [(0, "female", "Morning."), (1, "male", "Cafe's open, come in.")],
             )
+
+
+class PointerSeqTests(unittest.TestCase):
+    def test_pointer_moving_to_a_conversation_in_progress_starts_at_its_latest_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exporter = ConversationExporter(tmp)
+            cid = exporter.start([npc_participant(MARA), npc_participant(FINN)])
+            exporter.line(cid, MARA, "Morning.")
+            exporter.line(cid, FINN, "Morning, Mara!")
+            exporter.point_at(cid, ["Mara", "Finn"])
+            self.assertEqual(_pointer(Path(tmp))["seq"], 1)
+
+    def test_a_new_line_in_the_same_conversation_does_not_move_the_pointer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exporter = ConversationExporter(tmp)
+            cid = exporter.start([npc_participant(MARA), npc_participant(FINN)])
+            exporter.point_at(cid, ["Mara", "Finn"])
+            exporter.line(cid, MARA, "Morning.")
+            exporter.point_at(cid, ["Mara", "Finn"])
+            self.assertEqual(_pointer(Path(tmp))["seq"], 0)
+
+    def test_line_returns_its_seq(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exporter = ConversationExporter(tmp)
+            cid = exporter.start([npc_participant(MARA)])
+            self.assertEqual(exporter.line(cid, MARA, "Morning."), 0)
+            self.assertIsNone(exporter.line(cid, MARA, "..."))  # nothing speakable
+            self.assertEqual(exporter.line(cid, MARA, "Bye."), 1)
+
+
+def _pointer(directory: Path) -> dict:
+    return json.loads((directory / "active.json").read_text(encoding="utf-8"))
+
+
+def _ack(directory: Path, conversation: str, seq: int, age: float = 0.0) -> None:
+    """spoken.json as the speech side writes it, `age` seconds old."""
+    path = directory / "spoken.json"
+    path.write_text(json.dumps({"conversation": conversation, "seq": seq}), encoding="utf-8")
+    stamp = time.time() - age
+    os.utime(path, (stamp, stamp))
+
+
+class SpeechDoneTests(unittest.TestCase):
+    def _voiced(self, tmp: str) -> tuple[ConversationExporter, str]:
+        exporter = ConversationExporter(tmp)
+        cid = exporter.start([npc_participant(MARA), npc_participant(FINN)])
+        exporter.line(cid, MARA, "Morning.")
+        exporter.line(cid, FINN, "Morning, Mara!")
+        exporter.point_at(cid, ["Mara", "Finn"])
+        return exporter, cid
+
+    def test_waits_until_the_ack_reaches_the_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exporter, cid = self._voiced(tmp)
+            _ack(Path(tmp), f"{cid}.jsonl", 0)
+            self.assertIs(exporter.speech_done(cid, 1), False)
+            _ack(Path(tmp), f"{cid}.jsonl", 1)
+            self.assertIs(exporter.speech_done(cid, 1), True)
+
+    def test_an_ack_for_another_conversation_is_not_this_one_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exporter, cid = self._voiced(tmp)
+            _ack(Path(tmp), "conv_other_1.jsonl", 99)
+            self.assertIs(exporter.speech_done(cid, 1), False)
+
+    def test_the_initial_heartbeat_is_not_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exporter, cid = self._voiced(tmp)
+            _ack(Path(tmp), "", -1)
+            self.assertIs(exporter.speech_done(cid, 1), False)
+
+    def test_none_when_nobody_is_voicing_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exporter, cid = self._voiced(tmp)
+            self.assertIsNone(exporter.speech_done(cid, 1))  # no spoken.json yet
+            _ack(Path(tmp), f"{cid}.jsonl", 0, age=5.0)
+            self.assertIsNone(exporter.speech_done(cid, 1))  # speech side stopped
+            _ack(Path(tmp), f"{cid}.jsonl", 0)
+            exporter.point_at(None, [])
+            self.assertIsNone(exporter.speech_done(cid, 1))  # pointer moved away
+
+
+class NpcStateTests(unittest.TestCase):
+    def test_entry_normalizes_the_map_and_faces_the_last_movement(self):
+        self.assertEqual(npc_state_entry(0, (-100, 100), (0.0, 1.0)), {"slot": 0, "x": 0.0, "z": 1.0, "rot": 0.0})
+        self.assertEqual(npc_state_entry(1, (0, 50), (3.0, 0.0)), {"slot": 1, "x": 0.5, "z": 0.75, "rot": 1.571})
+        self.assertEqual(npc_state_entry(2, (500, -500), (0.0, -1.0))["x"], 1.0)  # clamped
+
+    def test_written_whole_and_only_when_changed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exporter = ConversationExporter(tmp)
+            npcs = [npc_state_entry(0, (0, 0), (0.0, 1.0))]
+            exporter.write_npc_state(npcs)
+            path = Path(tmp) / "npc_state.json"
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"npcs": npcs})
+            path.unlink()
+            exporter.write_npc_state(list(npcs))
+            self.assertFalse(path.exists())
+
+    def test_clear_keeps_the_renderers_own_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "bounds.json").write_text("{}", encoding="utf-8")
+            (directory / "spoken.json").write_text("{}", encoding="utf-8")
+            exporter = ConversationExporter(directory)
+            exporter.write_npc_state([npc_state_entry(0, (0, 0), (0.0, 1.0))])
+            exporter.point_at(exporter.start([npc_participant(MARA)]), ["Mara"])
+            exporter.clear()
+            self.assertEqual(sorted(entry.name for entry in directory.iterdir()), ["bounds.json", "spoken.json"])
 
 
 class SanitizeTests(unittest.TestCase):

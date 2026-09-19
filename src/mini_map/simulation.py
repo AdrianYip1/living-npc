@@ -7,13 +7,14 @@ both.
 from __future__ import annotations
 
 import logging
+import math
 import random
 from dataclasses import dataclass, field
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_futures
-from typing import Any
+from typing import Any, Callable
 
 from environment_agent.agent import EnvironmentAgent
 from environment_agent.time_of_day import MINUTES_PER_DAY
@@ -21,7 +22,7 @@ from environment_agent.travelers import Traveler
 
 from game_agents.agent import Agent, Scene, TurnResult
 from game_agents.conversation import ConversationHooks, ConversationTurn
-from game_agents.conversation_export import PLAYER_PARTICIPANT, ConversationExporter, npc_participant
+from game_agents.conversation_export import PLAYER_PARTICIPANT, ConversationExporter, npc_participant, npc_state_entry
 from game_agents.identity import Identity
 from game_agents.llm import SPEAK_TOOL_NAME
 from game_agents.registry import NPCRegistry, conversation_happened
@@ -117,8 +118,10 @@ class Simulation:
     particular -- goes into a speech feed state() exposes, for the page to
     draw as speech bubbles. With line_pacing on, each conversation line
     waits until the previous one has been up long enough to read (see
-    _read_seconds()), and the pair stays together until the last one has
-    too; pausing freezes that wait, same as the rest of the world.
+    _read_seconds()) -- or, while the speech program is voicing that
+    conversation, until it reports the previous line spoken -- and the pair
+    stays together until the last one is done too; pausing freezes that
+    wait, same as the rest of the world.
 
     Given an `exporter`, every conversation -- NPC-to-NPC and the player's
     -- is also written out for the speech/animation program as it happens
@@ -130,6 +133,9 @@ class Simulation:
     """
 
     MOVEMENT_HZ = 30.0
+    # How often NPC positions go out to the renderer (npc_state.json) --
+    # it reads them every 250 ms.
+    NPC_STATE_INTERVAL_S = 0.1
     # How many recent traveler arrivals state() keeps around. The page
     # spawns each one once, by id, so this only needs to cover arrivals
     # between two polls -- the rest is slack for a slow/backgrounded tab.
@@ -168,6 +174,10 @@ class Simulation:
     SECONDS_PER_WORD = 0.3
     MIN_LINE_SECONDS = 2.5
     MAX_LINE_SECONDS = 7.0
+    # When the speech side is voicing a conversation, its next line waits
+    # for the previous one to finish being spoken instead (see
+    # _hold_for_line) -- but never longer than this after it went up.
+    MAX_SPEECH_WAIT_SECONDS = 20.0
 
     def __init__(
         self,
@@ -242,6 +252,9 @@ class Simulation:
         # Per conversation (keyed by the pair), the real monotonic time its
         # latest line has been up long enough to read.
         self._line_ready_at: dict[frozenset[str], float] = {}
+        # Same keys: the exported (conversation id, seq) of that latest line
+        # and the monotonic time it went up, for waiting on the speech side.
+        self._line_voiced: dict[frozenset[str], tuple[str, int, float]] = {}
         # Conversations being exported (see the class docstring): NPC-to-NPC
         # ones by pair, as (conversation id, [initiator, target]), and the
         # player's as (conversation id, npc name).
@@ -250,6 +263,10 @@ class Simulation:
         self._player_export: tuple[str, str] | None = None
         self._export_lock = threading.Lock()
         self._player_position: tuple[float, float] = (0.0, 0.0)
+        # The direction each NPC last moved in, so it keeps facing that way
+        # once it stops (see export_npc_state), and when that last went out.
+        self._facing: dict[str, tuple[float, float]] = {}
+        self._npc_state_at = 0.0
         registry.conversation_hooks = ConversationHooks(
             run=self._run_conversation,
             on_start=self._on_conversation_start,
@@ -334,6 +351,9 @@ class Simulation:
                 self._update_travelers()
             # Even while paused: the player can still talk to someone.
             self.update_active_conversation()
+            if now - self._npc_state_at >= self.NPC_STATE_INTERVAL_S:
+                self._npc_state_at = now
+                self.export_npc_state()
             self._stop.wait(1.0 / self.MOVEMENT_HZ)
 
     def tick(self) -> None:
@@ -707,7 +727,7 @@ class Simulation:
         enough to read, then publishes it.
         """
         key = frozenset((turn.speaker, turn.listener))
-        self._hold_until(self._line_ready_at.get(key, 0.0))
+        self._hold_for_line(key)
         if turn.utterance is None:
             self._last_activity[turn.speaker] = self._describe(TurnResult(utterance=None, action=turn.action))
             self._publish_trade(turn.speaker, turn.action)
@@ -715,13 +735,17 @@ class Simulation:
         read_seconds = self._publish_speech(
             turn.speaker, turn.listener, turn.utterance, ends_conversation=turn.ends_conversation
         )
-        self._line_ready_at[key] = time.monotonic() + read_seconds
+        published = time.monotonic()
+        self._line_ready_at[key] = published + read_seconds
+        self._line_voiced.pop(key, None)
         self._last_activity[turn.speaker] = f"said to {turn.listener}: {turn.utterance}"
         with self._export_lock:
             export = self._exports.get(key)
         speaker = self._registry.get(turn.speaker)
         if export is not None and speaker is not None:
-            self._exporter.line(export[0], speaker.identity, turn.utterance)
+            seq = self._exporter.line(export[0], speaker.identity, turn.utterance)
+            if seq is not None:
+                self._line_voiced[key] = (export[0], seq, published)
 
     def _on_conversation_end(self, transcript: list[ConversationTurn]) -> None:
         """Keeps the pair together until the last line has been read, then
@@ -730,7 +754,7 @@ class Simulation:
         if not transcript:
             return
         a, b = transcript[0].speaker, transcript[0].listener
-        self._hold_until(self._line_ready_at.pop(frozenset((a, b)), 0.0))
+        self._hold_for_line(frozenset((a, b)), finished=True)
         self._end_export(frozenset((a, b)))
         self._talked_at[frozenset((a, b))] = self._environment.elapsed_minutes
         self._last_activity[a] = f"talked with {b}"
@@ -787,26 +811,87 @@ class Simulation:
         else:
             self._exporter.point_at(best[1], best[2])
 
+    def export_npc_state(self) -> None:
+        """Sends every NPC's position and facing to the renderer. Slots are
+        a PLACEHOLDER until settled with the renderer side: residents first
+        in registry order, then travelers in arrival order -- the renderer
+        drops any slot it has no body for, so residents get bodies first.
+        """
+        if self._exporter is None:
+            return
+        npcs = self._registry.residents() + self._registry.travelers()
+        for gone in self._facing.keys() - {agent.identity.name for agent in npcs}:
+            del self._facing[gone]
+        entries = []
+        for slot, agent in enumerate(npcs):
+            name = agent.identity.name
+            if math.hypot(*agent.velocity) > 1.0:
+                self._facing[name] = agent.velocity
+            entries.append(npc_state_entry(slot, agent.position, self._facing.get(name, (0.0, 1.0))))
+        self._exporter.write_npc_state(entries)
+
     def _refuse_conversation(self, initiator: str, target: str) -> str | None:
         talked_at = self._talked_at.get(frozenset((initiator, target)))
         if talked_at is None or self._environment.elapsed_minutes - talked_at >= self.REPEAT_CONVERSATION_MINUTES:
             return None
         return f"You only just talked with {target} -- there's nothing new to say yet. Leave them be for now."
 
-    def _hold_until(self, deadline: float) -> None:
+    def _hold_for_line(self, key: frozenset[str], *, finished: bool = False) -> None:
+        """Holds a conversation until its latest line is done: spoken aloud,
+        if the speech side is voicing this conversation right now, else up
+        long enough to read. `finished` forgets the conversation afterwards.
+        """
+        ready_at = self._line_ready_at.get(key, 0.0)
+        voiced = self._line_voiced.get(key)
+        if finished:
+            self._line_ready_at.pop(key, None)
+            self._line_voiced.pop(key, None)
+        if voiced is None or self._exporter is None:
+            self._hold_until(ready_at)
+            return
+        conversation_id, seq, published = voiced
+        exporter = self._exporter
+        self._hold_until(
+            ready_at,
+            spoken=lambda: exporter.speech_done(conversation_id, seq),
+            speech_deadline=published + self.MAX_SPEECH_WAIT_SECONDS,
+        )
+
+    def _hold_until(
+        self,
+        deadline: float,
+        *,
+        spoken: Callable[[], bool | None] | None = None,
+        speech_deadline: float = 0.0,
+    ) -> None:
         """Waits out the real time left until `deadline` -- except that time
         spent paused doesn't count, and a paused world holds here even past
         the deadline, so a conversation freezes mid-exchange like everything
         else. A no-op without line_pacing.
+
+        With `spoken`, it's asked instead whenever it has an answer: True
+        ends the wait (even before `deadline`), False keeps waiting (even
+        past it) until `speech_deadline`, and None -- nobody's voicing the
+        line -- falls back to `deadline`.
         """
         if not self._line_pacing:
             return
         step = 0.05
-        remaining = deadline - time.monotonic()
-        while not self._stop.is_set() and (remaining > 0 or self._paused.is_set()):
+        now = time.monotonic()
+        remaining = deadline - now
+        speech_remaining = speech_deadline - now
+        while not self._stop.is_set():
+            if not self._paused.is_set():
+                done = None if spoken is None else spoken()
+                if done is None:
+                    if remaining <= 0:
+                        return
+                elif done or speech_remaining <= 0:
+                    return
             self._stop.wait(step)
             if not self._paused.is_set():
                 remaining -= step
+                speech_remaining -= step
 
     def _read_seconds(self, text: str) -> float:
         return min(self.MAX_LINE_SECONDS, max(self.MIN_LINE_SECONDS, self.SECONDS_PER_WORD * len(text.split())))

@@ -71,7 +71,6 @@ const OVERHEARD_MAX_LINES = 40;
 
 const statusTime = document.getElementById("status-time");
 const statusWeather = document.getElementById("status-weather");
-const statusBackend = document.getElementById("status-backend");
 const statusGameMinutesPerRealMinute = document.getElementById("status-game-minutes-per-real-minute");
 const statusLlmCallsPerGameHour = document.getElementById("status-llm-calls-per-game-hour");
 const statusLlmCallsPerRealMinute = document.getElementById("status-llm-calls-per-real-minute");
@@ -133,9 +132,6 @@ function applyState(data) {
   }
   if (typeof data.weather === "string") {
     statusWeather.textContent = data.weather;
-  }
-  if (typeof data.backend === "string" && data.backend) {
-    statusBackend.textContent = data.backend;
   }
   // The first (game_minutes_per_real_minute, derived server-side from
   // --ticks-per-real-minute and EnvironmentAgent's minutes_per_tick) and
@@ -882,7 +878,9 @@ function updateNearbyNPC() {
 
 function applyPausedUI(paused) {
   state.paused = paused;
-  statusPlaystate.textContent = paused ? "Paused" : "Playing";
+  // Labeled with the action a click takes, so it reads as a button.
+  statusPlaystate.textContent = paused ? "▶ Resume" : "⏸ Pause";
+  statusPlaystate.classList.toggle("is-paused", paused);
   canvas.classList.toggle("paused", paused);
 }
 
@@ -1108,13 +1106,22 @@ function cancelDictation() {
 
 window.addEventListener("resize", resizeCanvas);
 
-statusPlaystate.addEventListener("click", () => setPaused(!state.paused));
-
-cameraToggle.addEventListener("click", () => {
-  cameraMode = cameraMode === "follow" ? "overview" : "follow";
-  cameraToggle.textContent = cameraMode === "follow" ? "View: Follow" : "View: Full map";
-  cameraToggle.blur(); // so Space keeps toggling pause, not this button
+statusPlaystate.addEventListener("click", () => {
+  setPaused(!state.paused);
+  statusPlaystate.blur(); // so Space doesn't also "click" the focused button
 });
+
+for (const button of cameraToggle.querySelectorAll(".seg-btn")) {
+  button.addEventListener("click", () => {
+    cameraMode = button.dataset.mode;
+    for (const other of cameraToggle.querySelectorAll(".seg-btn")) {
+      const active = other === button;
+      other.classList.toggle("is-active", active);
+      other.setAttribute("aria-pressed", String(active));
+    }
+    button.blur(); // so Space keeps toggling pause, not this button
+  });
+}
 
 document.addEventListener("keydown", (event) => {
   if (event.code === "Escape" && state.conversationOpen) {

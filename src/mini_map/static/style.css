@@ -75,22 +75,100 @@ body {
   cursor: help;
 }
 
-.playstate-btn {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  color: inherit;
-  font: inherit;
-  font-weight: bold;
-  cursor: pointer;
+.status-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.playstate-btn:hover {
-  text-decoration: underline;
+.ctrl-btn,
+.seg-btn {
+  font: inherit;
+  font-weight: bold;
+  color: #eee;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+/* Shared by the play/pause button and the view switch so they match. */
+:root {
+  --ctrl-height: 30px;
+}
+
+.ctrl-btn {
+  width: 100%;
+  height: var(--ctrl-height);
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(76, 175, 80, 0.55);
+  background: rgba(76, 175, 80, 0.18);
+}
+
+.ctrl-btn:hover {
+  background: rgba(76, 175, 80, 0.3);
+}
+
+/* Paused: amber, so the "Resume" call to action stands out. */
+.ctrl-btn.is-paused {
+  border-color: rgba(224, 160, 48, 0.6);
+  background: rgba(224, 160, 48, 0.2);
+}
+
+.ctrl-btn.is-paused:hover {
+  background: rgba(224, 160, 48, 0.32);
+}
+
+.segmented {
+  display: flex;
+  height: var(--ctrl-height);
+  padding: 2px;
+  gap: 2px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.seg-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: #999;
+}
+
+.seg-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.seg-btn svg .fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+.seg-btn:hover {
+  color: #eee;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.seg-btn.is-active {
+  color: #111;
+  background: #ddd;
+}
+
+.ctrl-btn:focus-visible,
+.seg-btn:focus-visible {
+  outline: 2px solid #4caf50;
+  outline-offset: 1px;
 }
 
 .hidden {

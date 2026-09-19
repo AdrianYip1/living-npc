@@ -17,10 +17,6 @@
       <span id="status-weather" class="value">--</span>
     </div>
     <div class="status-row status-row--labeled">
-      <span class="label" title="Which LLM backend drives the NPCs (GAME_AGENTS_LLM)">Backend</span>
-      <span id="status-backend" class="value">--</span>
-    </div>
-    <div class="status-row status-row--labeled">
       <span class="label" title="How many in-game minutes pass per real minute -- controls how fast the clock runs">Game-min/real-min</span>
       <span id="status-game-minutes-per-real-minute" class="value">--</span>
     </div>
@@ -32,11 +28,18 @@
       <span class="label" title="Derived: actual NPC LLM query rounds per real minute, given the tick rate and game-hour setting above">LLM calls/real-min</span>
       <span id="status-llm-calls-per-real-minute" class="value">--</span>
     </div>
-    <div class="status-row">
-      <button id="status-playstate" class="value playstate-btn" type="button">Paused</button>
-    </div>
-    <div class="status-row">
-      <button id="camera-toggle" class="value playstate-btn" type="button" title="Toggle between following the player and a zoomed-out view of the whole map">View: Follow</button>
+    <div class="status-row status-controls">
+      <button id="status-playstate" class="ctrl-btn is-paused" type="button" title="Pause or resume the simulation (Space)">&#9654; Resume</button>
+      <div id="camera-toggle" class="segmented" role="group" aria-label="Camera view">
+        <button class="seg-btn is-active" type="button" data-mode="follow" aria-pressed="true" aria-label="Follow player" title="Follow player">
+          <!-- crosshair: camera locked on the player -->
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" /><circle cx="8" cy="8" r="1.6" class="fill" /><path d="M8 1v3M8 12v3M1 8h3M12 8h3" /></svg>
+        </button>
+        <button class="seg-btn" type="button" data-mode="overview" aria-pressed="false" aria-label="Full map" title="Full map">
+          <!-- framed map: zoomed out to the whole thing -->
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 5V1.5H5M11 1.5h3.5V5M14.5 11v3.5H11M5 14.5H1.5V11" /><rect x="5" y="5" width="6" height="6" rx="0.5" /></svg>
+        </button>
+      </div>
     </div>
   </aside>
 
