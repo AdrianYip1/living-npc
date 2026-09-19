@@ -12,6 +12,8 @@
 #include <string>
 
 namespace HTN {
+	struct ShadowPass;
+
 	class Drawing {
 	public:
 		Drawing(Device& _device, Pipeline& _pipeline);
@@ -27,7 +29,8 @@ namespace HTN {
 							 const std::vector<enginemath::Mat4>& npcTransforms,
 							 Model* sceneModel = nullptr, Pipeline* scenePipeline = nullptr,
 							 Pipeline* skyboxPipeline = nullptr,
-							 const std::vector<VkDescriptorSet>& skyboxSets = {});
+							 const std::vector<VkDescriptorSet>& skyboxSets = {},
+							 const ShadowPass* shadow = nullptr);
 		void createFramebuffer();
 
 	private:

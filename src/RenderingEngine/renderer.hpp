@@ -21,6 +21,14 @@
 #include <map>
 
 namespace HTN {
+	struct ShadowPass {
+		VkRenderPass renderPass = VK_NULL_HANDLE;
+		VkFramebuffer framebuffer = VK_NULL_HANDLE;
+		VkPipeline pipeline = VK_NULL_HANDLE;
+		VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+		u32 mapSize = 0;
+	};
+
 	class Renderer {
 	public:
 		Renderer(Window& _window, Camera& _camera);
@@ -89,10 +97,18 @@ namespace HTN {
 
 		bool hasScene = false;
 
+		static constexpr u32 SHADOW_MAP_SIZE = 2048;
+		VkImage shadowMapImage = VK_NULL_HANDLE;
+		VkDeviceMemory shadowMapMemory = VK_NULL_HANDLE;
+		VkImageView shadowMapView = VK_NULL_HANDLE;
+		VkSampler shadowMapSampler = VK_NULL_HANDLE;
+		ShadowPass shadow;
+
 		void createSyncObjects();
 		void createTextures();
 		void createCubemap();
 		void createDescriptors();
+		void createShadowResources();
 		void initImGui();
 		void loadScene();
 
