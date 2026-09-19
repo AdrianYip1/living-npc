@@ -5,7 +5,7 @@ from typing import Any
 
 from .identity import DEFAULT_PROFILE_TEMPLATE, Identity
 from .inventory import Inventory
-from .llm import SPEAK_TOOL_NAME, SPEAK_TOOL_SCHEMA, LLMClient, LLMResult
+from .llm import ENDS_CONVERSATION_FIELD, SPEAK_TOOL_NAME, SPEAK_TOOL_SCHEMA, LLMClient, LLMResult
 from .memory import Memory, MemoryStore
 from .tools import ToolRegistry
 
@@ -31,11 +31,19 @@ class Scene:
 # routine turn (see Agent.respond), taking one of these isn't worth a memory.
 ROUTINE_ACTIONS = frozenset({"wait", "move_to", "check_inventory"})
 
+# Actions not offered on a conversation turn: you're already talking to
+# someone -- offering to start a conversation there invites a model to
+# "start" the one it's in (and so end it without saying a word).
+CONVERSATION_HIDDEN_ACTIONS = frozenset({"initiate_conversation"})
+
 
 @dataclass
 class TurnResult:
     utterance: str | None
     action: dict[str, Any] | None
+    # Only ever True on a conversation turn (see respond()'s `conversation`):
+    # the speaker marked this line as their goodbye.
+    ends_conversation: bool = False
 
 
 class Agent:
@@ -85,7 +93,13 @@ class Agent:
         )
 
     def respond(
-        self, stimulus: str, *, scene: Scene | None = None, tags: set[str] | None = None, routine: bool = False
+        self,
+        stimulus: str,
+        *,
+        scene: Scene | None = None,
+        tags: set[str] | None = None,
+        routine: bool = False,
+        conversation: bool = False,
     ) -> TurnResult:
         """`routine` marks a turn nobody prompted (e.g. the world tick's
         "It is now 08:15"): it's only remembered if the NPC did something
@@ -93,6 +107,10 @@ class Agent:
         tick's "walked to (x, y)" would crowd real interactions out of the
         top memories -- current position and destination are already in the
         system prompt, so nothing is lost by dropping them.
+
+        `conversation` marks a turn inside an NPC-to-NPC exchange: the speak
+        tool then also offers `ends_conversation`, so a goodbye can close
+        the exchange on the same line instead of costing an extra turn.
         """
         scene = scene or Scene()
         relevant = self.memory.retrieve(tags=tags)
@@ -100,13 +118,22 @@ class Agent:
         result = self.llm.complete(
             system=self._build_system_prompt(scene, relevant),
             messages=[{"role": "user", "content": stimulus}],
-            tools=[self._speak_schema(), *self.tools.schemas()],
+            tools=[
+                self._speak_schema(conversation=conversation),
+                *(
+                    schema
+                    for schema in self.tools.schemas()
+                    if not (conversation and schema["name"] in CONVERSATION_HIDDEN_ACTIONS)
+                ),
+            ],
         )
         call = result.tool_call
 
+        ends_conversation = False
         if call.name == SPEAK_TOOL_NAME:
             utterance = self._cap_utterance(call.arguments.get("text", ""))
             action = None
+            ends_conversation = conversation and bool(call.arguments.get(ENDS_CONVERSATION_FIELD, False))
             memory_content = f"{stimulus} -> {utterance}"
         else:
             utterance = None
@@ -114,21 +141,48 @@ class Agent:
             action = {"name": call.name, "arguments": call.arguments, "result": tool_result}
             memory_content = f"{stimulus} -> [action] {call.name}({call.arguments}) -> {tool_result}"
 
+        turn = TurnResult(utterance=utterance, action=action, ends_conversation=ends_conversation)
         if routine and (action is None or action["name"] in ROUTINE_ACTIONS):
-            return TurnResult(utterance=utterance, action=action)
+            return turn
 
         self.memory.add(memory_content, importance=self._score_importance(result), tags=tags or set())
 
-        return TurnResult(utterance=utterance, action=action)
+        return turn
 
-    def _speak_schema(self) -> dict[str, Any]:
-        if self.max_utterance_words is None:
-            return SPEAK_TOOL_SCHEMA
-        limit = self.max_utterance_words
-        return {
-            **SPEAK_TOOL_SCHEMA,
-            "description": f"{SPEAK_TOOL_SCHEMA['description']} You're a person of few words: at most {limit} words.",
-        }
+    def _speak_schema(self, *, conversation: bool = False) -> dict[str, Any]:
+        schema = SPEAK_TOOL_SCHEMA
+        # Outside a conversation, a spoken line has no one to answer it --
+        # models kept using it to address people instead of talking with
+        # them, so it's described as what it is.
+        description = (
+            schema["description"]
+            if conversation
+            else "Think aloud, in character: a remark to yourself that anyone nearby might overhear. "
+            "It is not a conversation -- to talk with someone, start a conversation with them instead."
+        )
+        if self.max_utterance_words is not None:
+            description += f" You're a person of few words: at most {self.max_utterance_words} words."
+        if description != schema["description"]:
+            schema = {**schema, "description": description}
+        if conversation:
+            parameters = schema["parameters"]
+            schema = {
+                **schema,
+                "parameters": {
+                    **parameters,
+                    "properties": {
+                        **parameters["properties"],
+                        ENDS_CONVERSATION_FIELD: {
+                            "type": "boolean",
+                            "description": (
+                                "True if this line is your goodbye and the conversation is over. "
+                                "Leave it false while there's still something to say."
+                            ),
+                        },
+                    },
+                },
+            }
+        return schema
 
     def _cap_utterance(self, text: str) -> str:
         if self.max_utterance_words is None:

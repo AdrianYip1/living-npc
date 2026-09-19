@@ -12,7 +12,7 @@ from unittest import mock
 from environment_agent.agent import EnvironmentAgent
 
 from game_agents.identity import Identity
-from game_agents.llm import SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
+from game_agents.llm import ENDS_CONVERSATION_FIELD, SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
 from game_agents.registry import NPCRegistry
 from game_agents.storage import save_identities
 
@@ -24,14 +24,16 @@ def _identity(name: str) -> Identity:
 
 
 class _NameAwareLLM:
-    """Mara always tries to start a conversation with Finn; anyone else
+    """Mara always tries to start a conversation with Finn (and just speaks
+    once she's in one); anyone else
     (i.e. Finn, if independently ticked on top of that) always just
     speaks -- a single shared LLMClient instance (NPCRegistry only takes
     one), told apart by which NPC's identity block opens the system prompt.
     """
 
     def complete(self, *, system, messages, tools):
-        if system.startswith("You are Mara."):
+        in_conversation = ENDS_CONVERSATION_FIELD in tools[0]["parameters"]["properties"]
+        if system.startswith("You are Mara.") and not in_conversation:
             return LLMResult(tool_call=ToolCall(name="initiate_conversation", arguments={"target_name": "Finn"}))
         return LLMResult(tool_call=ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "hello"}))
 
@@ -158,7 +160,7 @@ class TravelerArrivalTests(unittest.TestCase):
 
             for _ in range(1440):  # one full in-game day at 1 min/tick
                 sim._advance_environment()
-            sim.wait_for_pending_travelers(timeout=5)
+            sim.wait_for_pending(timeout=5)
 
             arrivals = sim.state()["traveler_arrivals"]
             self.assertEqual([a["id"] for a in arrivals], [1, 2, 3])
@@ -172,7 +174,7 @@ class TravelerArrivalTests(unittest.TestCase):
             registry = _registry(tmp, _IdentityLLM("Selwyn"))
             sim = Simulation(registry, EnvironmentAgent(travelers_per_day=(1, 1), start_minute=0, minutes_per_tick=1440, seed=1))
             sim._advance_environment()
-            sim.wait_for_pending_travelers(timeout=5)
+            sim.wait_for_pending(timeout=5)
 
             identity = sim.state()["traveler_arrivals"][0]["identity"]
             self.assertEqual(identity["name"], "Selwyn")
@@ -191,7 +193,7 @@ class TravelerArrivalTests(unittest.TestCase):
                 self.assertEqual(sim.state()["traveler_arrivals"], [])  # not ready yet
             finally:
                 release.set()
-            sim.wait_for_pending_travelers(timeout=5)
+            sim.wait_for_pending(timeout=5)
             self.assertEqual(len(sim.state()["traveler_arrivals"]), 1)
 
     def test_no_arrivals_when_the_environment_sends_none(self):
@@ -210,7 +212,7 @@ class TravelerArrivalTests(unittest.TestCase):
             sim = Simulation(registry, environment)
             for _ in range(5):
                 sim._advance_environment()
-            sim.wait_for_pending_travelers(timeout=5)
+            sim.wait_for_pending(timeout=5)
 
             ids = [a["id"] for a in sim.state()["traveler_arrivals"]]
             self.assertEqual(len(ids), Simulation.RECENT_TRAVELERS)
@@ -307,9 +309,13 @@ class SimulationTickTests(unittest.TestCase):
             sim.tick()
 
             # Mock NPCs just speak on the tick -- routine, so nothing to
-            # crowd real interactions out of their top memories.
-            self.assertEqual(registry.get("Mara").memory.all(), [])
-            self.assertEqual(registry.get("Finn").memory.all(), [])
+            # crowd real interactions out of their top memories. (Each does
+            # overhear the other, both standing at (0, 0), and so remember
+            # what was said aloud -- see Simulation._overhear -- but nothing
+            # of their own routine turn beyond that.)
+            for name in ("Mara", "Finn"):
+                memories = registry.get(name).memory.all()
+                self.assertTrue(all("said aloud" in m.content for m in memories), memories)
 
     def test_busy_npc_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -325,9 +331,10 @@ class SimulationTickTests(unittest.TestCase):
     def test_conversation_target_is_not_independently_ticked_again(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = _registry(tmp, _NameAwareLLM(), conversation_turns=2)
-            sim = Simulation(registry, EnvironmentAgent(seed=1))
+            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
 
             sim.tick()
+            sim.wait_for_pending()
 
             # If the target got ticked twice -- once inside the nested
             # conversation, once again independently by the outer loop --

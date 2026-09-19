@@ -20,6 +20,78 @@ def distance(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+# How far (map units) an NPC can see other people -- what goes in the
+# "who's around" block of its prompt (see render_surroundings()). Wider than
+# INTERACTION_RANGE, so there's someone to walk over to, not only someone
+# already close enough to talk to.
+AWARENESS_RANGE = 40
+
+# The two labeled lines render_surroundings() writes. Exposed so anything
+# reading the prompt back (the chatty mock backend) parses the same format.
+IN_REACH_LABEL = "Close enough to talk to"
+IN_VIEW_LABEL = "Further off, but in view"
+BUSY_MARK = " (busy talking)"
+
+
+def render_surroundings(me: tuple[float, float], others: list[tuple[str, tuple[float, float], bool]]) -> str:
+    """Who else is within AWARENESS_RANGE of `me`, as a prompt block: one
+    line for people within INTERACTION_RANGE (anyone you could start a
+    conversation with right now) and one for the rest. `others` is
+    (name, position, busy) for everyone else on the map. Empty string when
+    no one's around.
+    """
+    in_reach, in_view = [], []
+    for name, position, busy in sorted(others, key=lambda other: distance(me, other[1])):
+        gap = distance(me, position)
+        if gap > AWARENESS_RANGE:
+            continue
+        entry = f"{name} at ({position[0]:.0f}, {position[1]:.0f})" + (BUSY_MARK if busy else "")
+        (in_reach if gap <= INTERACTION_RANGE else in_view).append(entry)
+    lines = []
+    if in_reach:
+        lines.append(f"{IN_REACH_LABEL}: " + "; ".join(in_reach) + ".")
+    if in_view:
+        lines.append(f"{IN_VIEW_LABEL}: " + "; ".join(in_view) + ".")
+    return "\n".join(lines)
+
+
+# How close (map units) one NPC stops to another -- well inside
+# INTERACTION_RANGE, so walking up to someone still gets you close enough to
+# talk, but far enough apart that the two don't draw on top of each other.
+PERSONAL_SPACE = 4
+
+
+def keep_personal_space(
+    destination: tuple[int, int], start: tuple[float, float], others: list[tuple[float, float]]
+) -> tuple[int, int]:
+    """`destination`, moved just far enough (PERSONAL_SPACE) from each point
+    in `others` -- where other NPCs stand or are headed -- that the walker
+    won't end up on top of anyone. Each push is back toward `start`, so
+    walking up to someone stops in front of them, on your side.
+    """
+    x, y = float(destination[0]), float(destination[1])
+    for _ in range(3):  # a push away from one person can land near another
+        crowded = False
+        for ox, oy in others:
+            gap = math.hypot(x - ox, y - oy)
+            if gap >= PERSONAL_SPACE - 0.5:
+                continue
+            crowded = True
+            # Straight out from them -- or, when aiming right at their
+            # spot, back toward where the walker's coming from (or any
+            # fixed direction if the walker is standing there too).
+            dx, dy = x - ox, y - oy
+            if math.hypot(dx, dy) < 1e-6:
+                dx, dy = start[0] - ox, start[1] - oy
+            if math.hypot(dx, dy) < 1e-6:
+                dx, dy = 1.0, 0.0
+            norm = math.hypot(dx, dy)
+            x, y = ox + dx / norm * PERSONAL_SPACE, oy + dy / norm * PERSONAL_SPACE
+        if not crowded:
+            break
+    return clamp_coordinate(round(x)), clamp_coordinate(round(y))
+
+
 # NPC walking physics, in map units -- the player's own MAX_SPEED / ACCEL /
 # DECEL from mini_map/static/app.js (260 / 900 / 1400, in canvas units),
 # divided by its WORLD_SCALE of 6 canvas units per map unit, so NPCs move

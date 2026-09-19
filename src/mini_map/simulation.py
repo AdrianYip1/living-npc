@@ -19,11 +19,14 @@ from environment_agent.agent import EnvironmentAgent
 from environment_agent.travelers import Traveler
 
 from game_agents.agent import Agent, Scene, TurnResult
+from game_agents.conversation import ConversationHooks, ConversationTurn
 from game_agents.identity import Identity
 from game_agents.registry import NPCRegistry, conversation_happened
 from game_agents.storage import identity_to_record
 from game_agents.traveler_identity import generate_traveler_identity
-from game_agents.world import INTERACTION_RANGE, MAP_MAX, MAP_MIN, distance
+from game_agents.world import INTERACTION_RANGE, MAP_MAX, MAP_MIN, distance, render_surroundings
+
+from .traveler_purpose import BUY, TravelerPurpose, pick_purpose
 
 log = logging.getLogger(__name__)
 
@@ -69,8 +72,10 @@ class Simulation:
     above: a slow LLM call must not stall the clock. The traveler then
     joins the registry as a live Agent at a random point on a map edge,
     told (in its system prompt) that its goal is an exit point on the
-    opposite edge, and that it wants to visit one of world.json's places
-    (picked at random) on the way.
+    opposite edge, and why it stopped in town at all: a TravelerPurpose
+    rolled on arrival -- just passing through, spending some time at one of
+    world.json's places, or buying something from the resident who works
+    at one (see traveler_purpose.py).
 
     Travelers aren't on the residents' llm_calls_per_game_hour cadence --
     at NPC walking speed they cross the whole map in seconds, well inside
@@ -84,6 +89,17 @@ class Simulation:
     interrupts its own walk. While a turn is being decided the traveler
     stops in its tracks, rather than walking on past whatever it noticed.
     It leaves town (is removed) on reaching its exit point.
+
+    NPC-to-NPC conversations run on their own worker pool (see
+    ConversationHooks, which this fills in on the registry): the
+    initiator's initiate_conversation call returns as soon as the pair is
+    claimed, so a long exchange never holds up anyone else's turn. Every
+    spoken line -- in a conversation, to the player, or to no one in
+    particular -- goes into a speech feed state() exposes, for the page to
+    draw as speech bubbles. With line_pacing on, each conversation line
+    waits until the previous one has been up long enough to read (see
+    _read_seconds()), and the pair stays together until the last one has
+    too; pausing freezes that wait, same as the rest of the world.
     """
 
     MOVEMENT_HZ = 30.0
@@ -105,6 +121,19 @@ class Simulation:
     TRAVELER_MAX_STAY_MINUTES = 4 * 60
     # How close counts as having reached the exit point, in map units.
     TRAVELER_EXIT_REACHED = 1.0
+    # Coins a traveler carries when its identity comes from the fallback
+    # (no LLM), and the least one that came to buy something ever carries.
+    TRAVELER_FALLBACK_MONEY = (5, 30)
+    TRAVELER_BUYER_MIN_MONEY = 20
+    # How many recent spoken lines state() keeps around -- same slack
+    # reasoning as RECENT_TRAVELERS.
+    RECENT_SPEECH = 60
+    # How long a spoken line stays up, in real seconds: long enough to read
+    # at a relaxed pace, within these bounds. Also how long a conversation
+    # waits before its next line (see _on_conversation_turn).
+    SECONDS_PER_WORD = 0.3
+    MIN_LINE_SECONDS = 2.5
+    MAX_LINE_SECONDS = 7.0
 
     def __init__(
         self,
@@ -114,6 +143,7 @@ class Simulation:
         ticks_per_real_minute: float = 60.0,
         llm_calls_per_game_hour: float = 4.0,
         seed: int | None = None,
+        line_pacing: bool = True,
     ) -> None:
         self._registry = registry
         self._environment = environment
@@ -140,8 +170,9 @@ class Simulation:
         self._traveler_lock = threading.Lock()
         self._identity_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="traveler-identity")
         self._turn_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="traveler-turn")
-        # Background work (identity generation, traveler turns) not yet
-        # finished -- see wait_for_pending_travelers().
+        self._conversation_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="conversation")
+        # Background work (identity generation, traveler turns,
+        # conversations) not yet finished -- see wait_for_pending().
         self._pending: list[Future] = []
         self._pending_lock = threading.Lock()
         # Per-traveler bookkeeping, keyed by name, and which travelers
@@ -150,6 +181,22 @@ class Simulation:
         self._turns_in_flight: set[str] = set()
         self._turns_lock = threading.Lock()
         self._rng = random.Random(seed)
+        # Spoken lines for the page, tagged with ever-increasing ids like
+        # _traveler_arrivals. Appended from whichever thread the line was
+        # spoken on.
+        self._speech: list[dict[str, Any]] = []
+        self._next_speech_id = 1
+        self._speech_lock = threading.Lock()
+        self._line_pacing = line_pacing
+        # Per conversation (keyed by the pair), the real monotonic time its
+        # latest line has been up long enough to read.
+        self._line_ready_at: dict[frozenset[str], float] = {}
+        registry.conversation_hooks = ConversationHooks(
+            run=self._run_conversation,
+            scene=self._scene,
+            on_turn=self._on_conversation_turn,
+            on_end=self._on_conversation_end,
+        )
 
     def run_forever(self) -> None:
         env_thread = threading.Thread(target=self._run_environment_loop, daemon=True)
@@ -166,12 +213,14 @@ class Simulation:
         self._stop.set()
         self._identity_pool.shutdown(wait=False, cancel_futures=True)
         self._turn_pool.shutdown(wait=False, cancel_futures=True)
+        self._conversation_pool.shutdown(wait=False, cancel_futures=True)
 
-    def wait_for_pending_travelers(self, timeout: float = 10.0) -> None:
-        """Blocks until all traveler background work is done -- identity
-        generation, plus any turns that queued (e.g. the arrival turn each
-        admitted traveler gets). For tests and other callers that need
-        arrivals to have fully landed before they look.
+    def wait_for_pending(self, timeout: float = 10.0) -> None:
+        """Blocks until all background work is done -- traveler identity
+        generation, any turns that queued (e.g. the arrival turn each
+        admitted traveler gets), and conversations, including any those
+        started along the way. For tests and other callers that need it all
+        to have landed before they look.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -250,31 +299,34 @@ class Simulation:
         """
         with self._traveler_lock:
             recent_names = [arrival["identity"]["name"] for arrival in self._traveler_arrivals]
+            purpose = pick_purpose(self._rng, self._registry.places, self._registry.residents())
+            fallback_money = self._rng.randint(*self.TRAVELER_FALLBACK_MONEY)
         identity = generate_traveler_identity(
             self._registry.llm,
-            _traveler_brief(sketch),
-            fallback=_fallback_identity(sketch),
+            _traveler_brief(sketch, purpose),
+            fallback=_fallback_identity(sketch, purpose, money=fallback_money),
             taken_names=[agent.identity.name for agent in self._registry.all()] + recent_names,
         )
         # The fallback skips the taken-name check, and two generations can
         # race to the same name -- the registry has the final say.
         identity.name = self._registry.unique_name(identity.name)
+        if purpose.kind == BUY:
+            # Came to buy something: make sure they can pay for it.
+            identity.starting_money = max(identity.starting_money, self.TRAVELER_BUYER_MIN_MONEY)
 
         entry, exit_point = self._pick_entry_and_exit()
-        # One of world.json's places, picked at random -- a reason to stop
-        # somewhere in town rather than just crossing it.
-        places = self._registry.places
-        visit = self._rng.choice(places) if places else None
         standing_context = (
             f"Your exit point: ({exit_point[0]}, {exit_point[1]}), on the edge of the map. "
-            "Reaching it means leaving town."
+            "Reaching it means leaving town.\n" + purpose.standing_context()
         )
-        if visit is not None:
-            standing_context += f" Before you leave, you want to pay a visit to {_describe_place(visit)}."
-        self._registry.add_traveler(identity, position=entry, standing_context=standing_context)
+        agent = self._registry.add_traveler(identity, position=entry, standing_context=standing_context)
         now = self._environment.elapsed_minutes
         self._traveler_state[identity.name] = _TravelerState(
-            exit_point=exit_point, arrived_minute=now, last_turn_minute=now, visit=visit
+            exit_point=exit_point,
+            arrived_minute=now,
+            last_turn_minute=now,
+            purpose=purpose,
+            item_baseline=agent.inventory.count(purpose.item) if purpose.item else 0,
         )
 
         # The id is assigned only now, once the traveler exists, so ids in
@@ -282,7 +334,12 @@ class Simulation:
         # generations finish out of order.
         with self._traveler_lock:
             self._traveler_arrivals.append(
-                {"id": self._next_traveler_id, "arrived_at": clock, "identity": identity_to_record(identity)}
+                {
+                    "id": self._next_traveler_id,
+                    "arrived_at": clock,
+                    "identity": identity_to_record(identity),
+                    "purpose": {"kind": purpose.kind, "summary": purpose.summary()},
+                }
             )
             self._next_traveler_id += 1
             del self._traveler_arrivals[: -self.RECENT_TRAVELERS]
@@ -291,7 +348,7 @@ class Simulation:
             identity.name,
             f"You've just arrived at the edge of town, at ({entry[0]}, {entry[1]}). "
             f"Your exit point is ({exit_point[0]}, {exit_point[1]}), on the far side of the map."
-            + self._traveler_state[identity.name].visit_reminder(),
+            + self._traveler_state[identity.name].reminder(agent, now),
         )
 
     def _pick_entry_and_exit(self) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -329,11 +386,8 @@ class Simulation:
                     self._last_activity.pop(name, None)
                 continue
 
-            if (
-                st.visit is not None
-                and not st.visited
-                and distance(agent.position, st.visit["position"]) <= INTERACTION_RANGE
-            ):
+            place = st.purpose.place
+            if place is not None and not st.visited and distance(agent.position, place["position"]) <= INTERACTION_RANGE:
                 st.visited = True
 
             if now - st.arrived_minute >= self.TRAVELER_MAX_STAY_MINUTES:
@@ -373,7 +427,17 @@ class Simulation:
                 self._start_traveler_turn(
                     name,
                     f"You've reached ({reached[0]}, {reached[1]}).{company} "
-                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.visit_reminder(),
+                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                )
+                continue
+
+            if st.talked_with is not None:
+                # Just out of a conversation: decide what's next now.
+                partner, st.talked_with = st.talked_with, None
+                self._start_traveler_turn(
+                    name,
+                    f"You've just finished talking with {partner}. "
+                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                 )
                 continue
 
@@ -382,7 +446,7 @@ class Simulation:
                 self._start_traveler_turn(
                     name,
                     f"You're standing at ({agent.position[0]:.0f}, {agent.position[1]:.0f}), not walking anywhere. "
-                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.visit_reminder(),
+                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                 )
 
     def _start_traveler_turn(self, name: str, stimulus: str) -> None:
@@ -399,7 +463,7 @@ class Simulation:
             agent = self._registry.get(name)
             if agent is None:
                 return
-            result = agent.respond(stimulus, scene=self._scene(), routine=True)
+            result = agent.respond(stimulus, scene=self._scene(agent), routine=True)
             self._record_turn(agent, result)
         except Exception:
             log.exception("traveler %s's turn failed", name)
@@ -410,12 +474,23 @@ class Simulation:
             with self._turns_lock:
                 self._turns_in_flight.discard(name)
 
-    def _scene(self) -> Scene:
+    def _scene(self, agent: Agent | None = None) -> Scene:
+        """Time and weather -- plus, given the agent whose turn it is, who's
+        around them (see world.render_surroundings()).
+        """
         clock, phase = self._environment.clock, self._environment.time_of_day.value
-        return Scene(
-            time=f"{clock} ({phase})",
-            context=f"It's {clock}, {phase}, and {self._environment.weather.value} out.",
-        )
+        context = f"It's {clock}, {phase}, and {self._environment.weather.value} out."
+        if agent is not None:
+            context = "\n".join(filter(None, (context, self._surroundings(agent))))
+        return Scene(time=f"{clock} ({phase})", context=context)
+
+    def _surroundings(self, agent: Agent) -> str:
+        others = [
+            (other.identity.name, other.position, self._registry.is_busy(other.identity.name))
+            for other in self._registry.all()
+            if other is not agent
+        ]
+        return render_surroundings(agent.position, others)
 
     def _query_npcs(self) -> None:
         phase = self._environment.time_of_day.value
@@ -433,9 +508,13 @@ class Simulation:
             if name in acted or self._registry.is_busy(name):
                 continue
 
+            surroundings = self._surroundings(agent)
             scene = Scene(
                 time=f"{clock} ({phase})",
-                context=f"It's {clock}, {phase}, and {weather} out. Decide what you do right now, guided by your habits.",
+                context=(
+                    f"It's {clock}, {phase}, and {weather} out. Decide what you do right now, guided by your habits."
+                    + (f"\n{surroundings}" if surroundings else "")
+                ),
             )
             result = agent.respond(f"It is now {clock} ({phase}).", scene=scene, routine=True)
             acted.add(name)
@@ -450,7 +529,10 @@ class Simulation:
         (out of range, busy) leaves the target untouched.
         """
         name = agent.identity.name
-        self._last_activity[name] = self._describe(result)
+        if result.utterance is not None:
+            self._publish_speech(name, None, result.utterance)
+            self._overhear(agent, result.utterance)
+        self._publish_trade(name, result.action)
         if (
             result.action is not None
             and result.action["name"] == "initiate_conversation"
@@ -458,9 +540,148 @@ class Simulation:
         ):
             resolved = self._registry.resolve(result.action["arguments"].get("target_name", ""))
             if resolved is not None:
-                self._last_activity[resolved] = f"talked with {name}"
+                # The exchange runs on its own thread and may already be
+                # over (and have written "talked with") by now.
+                if self._registry.partner_of(name) == resolved:
+                    self._last_activity[name] = f"talking with {resolved}"
+                    self._last_activity[resolved] = f"talking with {name}"
                 return resolved
+        self._last_activity[name] = self._describe(result)
         return None
+
+    def _overhear(self, speaker: Agent, text: str) -> None:
+        """A line said aloud outside any conversation still reaches whoever
+        is close enough to talk to the speaker (and not busy in a
+        conversation of their own): it goes in their memory, so on their
+        next turn they can answer it -- e.g. by starting a conversation.
+        """
+        name = speaker.identity.name
+        heard_by = [
+            other
+            for other in self._registry.all()
+            if other is not speaker
+            and not self._registry.is_busy(other.identity.name)
+            and distance(speaker.position, other.position) <= INTERACTION_RANGE
+        ]
+        for other in heard_by:
+            other.memory.add(f'{name} said aloud nearby: "{text}"', importance=5, tags={name})
+        if heard_by:
+            # A routine line isn't normally remembered (see Agent.respond),
+            # but one other people heard is -- otherwise the speaker has no
+            # idea it already said it, and says it again next turn.
+            names = {other.identity.name for other in heard_by}
+            speaker.memory.add(f'You said aloud, with {", ".join(sorted(names))} nearby: "{text}"', importance=3, tags=names)
+
+    # ------------------------------------------------------------------ #
+    # NPC-to-NPC conversations (see ConversationHooks)
+    # ------------------------------------------------------------------ #
+    def _run_conversation(self, exchange) -> bool:
+        def run() -> None:
+            try:
+                exchange()
+            except Exception:
+                log.exception("conversation failed")
+
+        return self._submit(self._conversation_pool, run)
+
+    def _on_conversation_turn(self, turn: ConversationTurn) -> None:
+        """Runs on the conversation's worker thread, right after a side
+        decides its line: holds it until the previous line has been up long
+        enough to read, then publishes it.
+        """
+        key = frozenset((turn.speaker, turn.listener))
+        self._hold_until(self._line_ready_at.get(key, 0.0))
+        if turn.utterance is None:
+            self._last_activity[turn.speaker] = self._describe(TurnResult(utterance=None, action=turn.action))
+            self._publish_trade(turn.speaker, turn.action)
+            return
+        read_seconds = self._publish_speech(
+            turn.speaker, turn.listener, turn.utterance, ends_conversation=turn.ends_conversation
+        )
+        self._line_ready_at[key] = time.monotonic() + read_seconds
+        self._last_activity[turn.speaker] = f"said to {turn.listener}: {turn.utterance}"
+
+    def _on_conversation_end(self, transcript: list[ConversationTurn]) -> None:
+        """Keeps the pair together until the last line has been read, then
+        lets them go (the registry releases them right after this).
+        """
+        if not transcript:
+            return
+        a, b = transcript[0].speaker, transcript[0].listener
+        self._hold_until(self._line_ready_at.pop(frozenset((a, b)), 0.0))
+        self._last_activity[a] = f"talked with {b}"
+        self._last_activity[b] = f"talked with {a}"
+        if not any(turn.utterance for turn in transcript):
+            # Nothing was said -- no conversation to follow up on, and
+            # prompting right away again risks a tight loop of non-starts.
+            return
+        for name, partner in ((a, b), (b, a)):
+            st = self._traveler_state.get(name)
+            if st is not None:
+                st.talked_with = partner
+
+    def _hold_until(self, deadline: float) -> None:
+        """Waits out the real time left until `deadline` -- except that time
+        spent paused doesn't count, and a paused world holds here even past
+        the deadline, so a conversation freezes mid-exchange like everything
+        else. A no-op without line_pacing.
+        """
+        if not self._line_pacing:
+            return
+        step = 0.05
+        remaining = deadline - time.monotonic()
+        while not self._stop.is_set() and (remaining > 0 or self._paused.is_set()):
+            self._stop.wait(step)
+            if not self._paused.is_set():
+                remaining -= step
+
+    def _read_seconds(self, text: str) -> float:
+        return min(self.MAX_LINE_SECONDS, max(self.MIN_LINE_SECONDS, self.SECONDS_PER_WORD * len(text.split())))
+
+    def _publish_trade(self, name: str, action: dict[str, Any] | None) -> None:
+        """A trade that went through goes in the feed too (kind "trade"), as
+        a narrated line -- "Wren bought 1 x horseshoe from Mara for 5
+        coins." -- so the page can show it happening.
+        """
+        if action is None or action["name"] not in ("buy_item", "sell_item"):
+            return
+        result = action["result"]
+        if not isinstance(result, str) or not result.startswith(("You bought ", "You sold ")):
+            return
+        text = f"{name} {result.split('. ', 1)[0].removeprefix('You ').rstrip('.')}."
+        self._publish_speech(name, None, text, kind="trade")
+
+    def _publish_speech(
+        self,
+        speaker: str,
+        listener: str | None,
+        text: str,
+        *,
+        ends_conversation: bool = False,
+        kind: str = "speech",
+    ) -> float:
+        """Adds a line to the speech feed and returns how long it should
+        stay up. `listener` is another NPC's name, "player", or None for a
+        line said to no one in particular. `kind` is "speech" for a spoken
+        line, "trade" for a narrated trade (see _publish_trade).
+        """
+        read_seconds = self._read_seconds(text)
+        with self._speech_lock:
+            self._speech.append(
+                {
+                    "id": self._next_speech_id,
+                    "kind": kind,
+                    "speaker": speaker,
+                    "listener": listener,
+                    "text": text,
+                    "read_seconds": read_seconds,
+                    "ends_conversation": ends_conversation,
+                    "clock": self._environment.clock,
+                }
+            )
+            self._next_speech_id += 1
+            del self._speech[: -self.RECENT_SPEECH]
+        return read_seconds
 
     # ------------------------------------------------------------------ #
     # player conversation (see mini_map.game's /api/conversation/* routes)
@@ -490,8 +711,12 @@ class Simulation:
                 f"It's {self._environment.weather.value} out."
             ),
         )
-        result = agent.respond(text, scene=scene, tags={"player"})
+        # conversation=True: the player is talking with them, so speaking
+        # means answering, not thinking aloud (see Agent._speak_schema).
+        result = agent.respond(text, scene=scene, tags={"player"}, conversation=True)
         self._last_activity[name] = self._describe(result)
+        if result.utterance is not None:
+            self._publish_speech(name, "player", result.utterance)
         return {
             "utterance": result.utterance,
             "action": None if result.action is None else {"name": result.action["name"]},
@@ -523,8 +748,11 @@ class Simulation:
     def state(self) -> dict[str, Any]:
         with self._traveler_lock:
             traveler_arrivals = list(self._traveler_arrivals)
+        with self._speech_lock:
+            speech = list(self._speech)
         return {
             "traveler_arrivals": traveler_arrivals,
+            "speech": speech,
             "clock": self._environment.clock,
             "time_of_day": self._environment.time_of_day.value,
             "weather": self._environment.weather.value,
@@ -541,6 +769,7 @@ class Simulation:
                     "vy": agent.velocity[1],
                     "destination": None if agent.destination is None else list(agent.destination),
                     "busy": self._registry.is_busy(agent.identity.name),
+                    "talking_to": self._registry.partner_of(agent.identity.name),
                     "traveler": self._registry.is_traveler(agent.identity.name),
                     "activity": self._last_activity.get(agent.identity.name, ""),
                 }
@@ -559,34 +788,41 @@ class _TravelerState:
     noticed: set[str] = field(default_factory=set)
     # Where it was last seen walking to, so arriving there can be noticed.
     heading_to: tuple[int, int] | None = None
-    # The world.json place it came to visit (None if the world has none),
-    # and whether it has been within INTERACTION_RANGE of it yet.
-    visit: dict[str, Any] | None = None
+    # Why it stopped in town, and whether it has been within
+    # INTERACTION_RANGE of that purpose's place yet.
+    purpose: TravelerPurpose = field(default_factory=lambda: TravelerPurpose("passing_through"))
     visited: bool = False
+    # For a buyer: how many of the item it carried on arrival, so having
+    # more means the purchase happened.
+    item_baseline: int = 0
+    # Set when a conversation it was in just ended (to the partner's name),
+    # so it gets a turn to decide what's next right away.
+    talked_with: str | None = None
 
-    def visit_reminder(self) -> str:
-        """Tacked onto a turn's stimulus, so the traveler knows whether its
-        visit is still ahead of it or already done.
+    def reminder(self, agent: Agent, now: int) -> str:
+        """Tacked onto a turn's stimulus, so the traveler knows where it
+        stands on its purpose -- and how long it's been in town, which is
+        what lets "stay a while" ever end.
         """
-        if self.visit is None:
-            return ""
-        if self.visited:
-            return f" You've already visited {self.visit['name']}."
-        return f" You still want to visit {_describe_place(self.visit)}."
+        bought = self.purpose.item is not None and agent.inventory.count(self.purpose.item) > self.item_baseline
+        stayed = now - self.arrived_minute
+        if stayed < 30:
+            return self.purpose.reminder(arrived=self.visited, bought=bought)
+        hours, minutes = divmod(stayed, 60)
+        spent = f"{hours} hour{'s' if hours != 1 else ''}" + (f" {minutes} minutes" if minutes else "") if hours else f"{minutes} minutes"
+        return self.purpose.reminder(arrived=self.visited, bought=bought) + f" You've been in town {spent} so far."
 
 
-def _describe_place(place: dict[str, Any]) -> str:
-    return f"{place['name']} at ({place['position'][0]}, {place['position'][1]})"
-
-
-def _traveler_brief(sketch: Traveler) -> str:
+def _traveler_brief(sketch: Traveler, purpose: TravelerPurpose) -> str:
+    # The purpose, not the sketch's own `reason`, says why they're here --
+    # the two are rolled independently and could contradict each other.
     return (
-        f"A traveler is arriving in town. They come from {sketch.origin}, and they're {sketch.reason}. "
+        f"A traveler is arriving in town. They come from {sketch.origin}. {purpose.brief()} "
         f"At a glance they seem {' and '.join(sketch.traits)}."
     )
 
 
-def _fallback_identity(sketch: Traveler) -> Identity:
+def _fallback_identity(sketch: Traveler, purpose: TravelerPurpose, *, money: int) -> Identity:
     """The environment agent's own sketch, filled out into an Identity
     without an LLM -- used by the mock backend and whenever generation
     fails (see generate_traveler_identity).
@@ -594,8 +830,9 @@ def _fallback_identity(sketch: Traveler) -> Identity:
     return Identity(
         name=sketch.name,
         traits=list(sketch.traits),
-        backstory=f"A traveler from {sketch.origin}, {sketch.reason}.",
+        backstory=f"A traveler from {sketch.origin}. {purpose.brief()}",
         speech_style="plain and brief, like a stranger in town",
-        goals=[sketch.reason],
+        goals=[purpose.goal()],
         habits=["Wanders through town without lingering long"],
+        starting_money=money,
     )

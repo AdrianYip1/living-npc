@@ -1,0 +1,58 @@
+[
+  {
+    "speaker": "Doran",
+    "listener": "Finn",
+    "stimulus": "You've walked up to Finn. Say your opening line.",
+    "utterance": "Morning. Mind if I rest here a while, catch some news?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Doran",
+    "stimulus": "Doran says: \"Morning. Mind if I rest here a while, catch some news?\"",
+    "utterance": "Oh, not at all, not at all! Sit, sit, plenty of room on the pier. Not much news to speak of, quiet little town really, but, uh, where you headed from, traveler? You look like you've put some road behind you.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Doran",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Oh, not at all, not at all! Sit, sit, plenty of room on the pier. Not much news to speak of, quiet little town really, but, uh, where you headed from, traveler? You look like you've put some road behind you.\"",
+    "utterance": "North, the mountain pass. Long walk down.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Doran",
+    "stimulus": "Doran says: \"North, the mountain pass. Long walk down.\"",
+    "utterance": "The mountain pass, eh? That's a fair trek, that is, I hear it gets awful cold up there even this time of year. Did you, uh, run into much on the way down, bandits or, or wolves or anything like that? Say, you wouldn't happen to have a spare net on you, would you? Mine's gone and torn on me, and I don't suppose a mountain traveler carries such things, but a fella can ask, can't he?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Doran",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"The mountain pass, eh? That's a fair trek, that is, I hear it gets awful cold up there even this time of year. Did you, uh, run into much on the way down, bandits or, or wolves or anything like that? Say, you wouldn't happen to have a spare net on you, would you? Mine's gone and torn on me, and I don't suppose a mountain traveler carries such things, but a fella can ask, can't he?\"",
+    "utterance": "No net, sorry. Some wolves, kept my distance. No bandits.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Doran",
+    "stimulus": "Doran says: \"No net, sorry. Some wolves, kept my distance. No bandits.\"",
+    "utterance": "Ah, well, no matter, no matter, was worth a try! Wolves and all, glad you kept your distance, smart man. Guess I'll have to find someone else round town for that net, maybe Mara at the forge'll know somebody. Anyway, thanks for the chat, safe travels wherever you're headed next, friend!",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Doran",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Ah, well, no matter, no matter, was worth a try! Wolves and all, glad you kept your distance, smart man. Guess I'll have to find someone else round town for that net, maybe Mara at the forge'll know somebody. Anyway, thanks for the chat, safe travels wherever you're headed next, friend!\"",
+    "utterance": "Safe fishing, Finn. Take care.",
+    "action": null,
+    "ends_conversation": true
+  }
+]

@@ -1,0 +1,42 @@
+[
+  {
+    "speaker": "Cassian",
+    "listener": "Finn",
+    "stimulus": "You walk up to Finn to start a conversation.",
+    "utterance": "Finn, good sir! Any fish, and better yet, any news worth telling?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Cassian",
+    "stimulus": "Cassian says: \"Finn, good sir! Any fish, and better yet, any news worth telling?\"",
+    "utterance": "Cassian! Good to see you, good to see you. Fish, aye, five of 'em, caught 'em just this morning off the east post, though one's a bit small, might toss it back to its kin if I'm honest with meself. News, though, news, hmm -- nothing too wild, just the usual talk down at the docks, travelers coming through with tales of, oh, roads and weather and the like. Say, actually -- you don't happen to have a spare net on you, or know anyone who does? Mine's torn clean through and I've been asking round for days now, no luck yet.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Cassian",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Cassian! Good to see you, good to see you. Fish, aye, five of 'em, caught 'em just this morning off the east post, though one's a bit small, might toss it back to its kin if I'm honest with meself. News, though, news, hmm -- nothing too wild, just the usual talk down at the docks, travelers coming through with tales of, oh, roads and weather and the like. Say, actually -- you don't happen to have a spare net on you, or know anyone who does? Mine's torn clean through and I've been asking round for days now, no luck yet.\"",
+    "utterance": "No net on me, alas, but I'll ask round for you, friend.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Cassian",
+    "stimulus": "Cassian says: \"No net on me, alas, but I'll ask round for you, friend.\"",
+    "utterance": "Ah, would you? That's kind of you, truly -- I'd be grateful, even a half-decent net would do, I'm not fussy. Well, safe travels to you, Cassian, and mind the roads out east if the weather turns -- good talking with you as always!",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Cassian",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Ah, would you? That's kind of you, truly -- I'd be grateful, even a half-decent net would do, I'm not fussy. Well, safe travels to you, Cassian, and mind the roads out east if the weather turns -- good talking with you as always!\"",
+    "utterance": "Fair winds to you, Finn! I'll keep an ear out for that...",
+    "action": null,
+    "ends_conversation": true
+  }
+]

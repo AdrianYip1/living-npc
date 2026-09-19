@@ -97,6 +97,66 @@ body {
   display: none !important;
 }
 
+#overheard {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 1;
+  width: 300px;
+  max-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(20, 20, 20, 0.78);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+
+.overheard-title {
+  font-size: 11px;
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+#overheard-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  line-height: 1.45;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+#overheard-log .line + .line {
+  margin-top: 4px;
+}
+
+#overheard-log .who {
+  font-weight: bold;
+  color: #9ecbff;
+}
+
+#overheard-log .goodbye {
+  color: #bbb;
+}
+
+#overheard-log .note {
+  font-style: italic;
+}
+
+#overheard-log .arrival {
+  color: #ffb74d;
+}
+
+#overheard-log .trade {
+  color: #a5d6a7;
+}
+
 #proximity-hint {
   position: fixed;
   left: 50%;
@@ -209,6 +269,14 @@ body {
     padding: 8px 10px;
     gap: 6px;
     font-size: 12px;
+  }
+
+  #overheard {
+    top: 12px;
+    left: 12px;
+    /* leaves room for the 120px status panel on the right */
+    width: calc(100vw - 156px);
+    max-height: 22vh;
   }
 
   #conversation {

@@ -443,7 +443,9 @@ class RunConversationTests(unittest.TestCase):
 
         self.assertEqual(len(transcript), 4)
         self.assertTrue(all(turn.utterance is not None for turn in transcript))
-        self.assertEqual([turn.speaker for turn in transcript], ["B", "A", "B", "A"])
+        # The initiator opens.
+        self.assertEqual([turn.speaker for turn in transcript], ["A", "B", "A", "B"])
+        self.assertEqual([turn.listener for turn in transcript], ["B", "A", "B", "A"])
         self.assertEqual(len(a.memory.all()), 2)
         self.assertEqual(len(b.memory.all()), 2)
         self.assertTrue(all(m.tags == {"B"} for m in a.memory.all()))
@@ -454,10 +456,10 @@ class RunConversationTests(unittest.TestCase):
         tools.register(
             Tool(name="shrug", description="shrug", parameters={"type": "object", "properties": {}}, handler=lambda: "shrugged")
         )
-        a = Agent(_identity("A"), MockLLMClient())
-        b = Agent(_identity("B"), _FixedLLM(ToolCall(name="shrug", arguments={})), tools)
+        a = Agent(_identity("A"), _FixedLLM(ToolCall(name="shrug", arguments={})), tools)
+        b = Agent(_identity("B"), MockLLMClient())
 
-        transcript = run_conversation(a, b, turns=4)  # b speaks first (target goes first) and immediately shrugs
+        transcript = run_conversation(a, b, turns=4)  # a opens (the initiator goes first) and immediately shrugs
 
         self.assertEqual(len(transcript), 1)
         self.assertIsNone(transcript[0].utterance)
@@ -499,7 +501,7 @@ class InitiateConversationToolTests(unittest.TestCase):
             self.assertIn("Finn", result)
             self.assertFalse(registry.is_busy("Mara"))
             self.assertFalse(registry.is_busy("Finn"))
-            # turns=2: Finn (the target) goes first, then Mara -- one memory each
+            # turns=2: Mara (the initiator) opens, then Finn -- one memory each
             self.assertEqual(len(registry.get("Finn").memory.all()), 1)
             self.assertEqual(len(registry.get("Mara").memory.all()), 1)
 
@@ -726,8 +728,8 @@ class ConversationLoggingTests(unittest.TestCase):
             [log_file] = list(log_dir.glob("*.json"))
             transcript = json.loads(log_file.read_text(encoding="utf-8"))
             self.assertEqual(len(transcript), 2)
-            self.assertEqual(transcript[0]["speaker"], "Finn")
-            self.assertEqual(transcript[1]["speaker"], "Mara")
+            self.assertEqual(transcript[0]["speaker"], "Mara")
+            self.assertEqual(transcript[1]["speaker"], "Finn")
             for turn in transcript:
                 self.assertIn("stimulus", turn)
                 self.assertIn("utterance", turn)

@@ -23,6 +23,14 @@
 // move_to calls send them, and vanish from the list once they reach their
 // exit point. The page only draws them (dashed ring, fade-in) and logs
 // each arrival from traveler_arrivals.
+//
+// Speech is server-driven too: /api/state's `speech` is a feed of every
+// line an NPC says out loud -- to another NPC, to the player, or to no one
+// in particular -- each tagged with an id and how long it should stay up
+// (read_seconds; the server paces NPC-to-NPC conversations by the same
+// number, see Simulation._on_conversation_turn). Each new line becomes a
+// speech bubble over its speaker, and NPC-to-NPC lines are also listed in
+// the "Overheard" panel. `talking_to` on each NPC links a conversing pair.
 
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
@@ -44,6 +52,18 @@ const STATE_POLL_MS = 200;
 // Client-side smoothing of server-driven NPC positions (see applyState).
 const NPC_SNAP_DISTANCE = 60; // world units; bigger gaps than this just jump
 const NPC_CORRECTION_RATE = 8; // per sec; how fast drift from the server is bled off
+// Speech bubbles (see drawBubble).
+const BUBBLE_MAX_WIDTH = 220; // px, including padding
+const BUBBLE_PADDING = 8;
+const BUBBLE_MAX_LINES = 4; // longer lines are cut off with an ellipsis
+const BUBBLE_FONT = "13px system-ui, sans-serif";
+const BUBBLE_NAME_FONT = "bold 11px system-ui, sans-serif";
+const BUBBLE_LINE_HEIGHT = 16;
+const BUBBLE_NAME_HEIGHT = 14;
+const BUBBLE_TAIL = 8;
+const BUBBLE_LINGER_SECONDS = 1.5; // on top of the server's read_seconds
+const BUBBLE_FADE_SECONDS = 0.35;
+const OVERHEARD_MAX_LINES = 40;
 
 const statusTime = document.getElementById("status-time");
 const statusWeather = document.getElementById("status-weather");
@@ -57,6 +77,8 @@ const conversationInput = document.getElementById("conversation-input");
 const conversationForm = document.getElementById("conversation-form");
 const conversationLog = document.getElementById("conversation-log");
 const proximityHint = document.getElementById("proximity-hint");
+const overheardEl = document.getElementById("overheard");
+const overheardLog = document.getElementById("overheard-log");
 
 const state = {
   paused: true,
@@ -149,6 +171,7 @@ function applyState(data) {
       ? { x: entry.destination[0] * WORLD_SCALE, y: entry.destination[1] * WORLD_SCALE }
       : null;
     npc.busy = entry.busy;
+    npc.talkingTo = entry.talking_to || null;
     npc.activity = entry.activity;
     npcs.push(npc);
   }
@@ -164,6 +187,88 @@ function applyState(data) {
   }
 
   logTravelerArrivals(data.traveler_arrivals || []);
+  receiveSpeech(data.speech || []);
+}
+
+// Speaker name -> the bubble currently over their head. Times are on
+// bubbleClock, which only runs while the world is playing -- so a paused
+// world freezes its bubbles along with its conversations.
+const bubbles = new Map();
+let bubbleClock = 0;
+
+// Highest speech id already shown; same first-poll rule as
+// lastTravelerId, so a reload doesn't replay old lines.
+let lastSpeechId = null;
+
+function receiveSpeech(lines) {
+  const maxId = lines.reduce((max, line) => Math.max(max, line.id), 0);
+  if (lastSpeechId === null) {
+    lastSpeechId = maxId;
+    return;
+  }
+  for (const line of lines) {
+    if (line.id <= lastSpeechId) {
+      continue;
+    }
+    if (line.kind === "trade") {
+      // Narration, not speech: logged, but no bubble.
+      logOverheardNote(line.text, "trade");
+      continue;
+    }
+    showBubble(line);
+    if (line.listener !== "player") {
+      logOverheard(line);
+    }
+  }
+  lastSpeechId = Math.max(lastSpeechId, maxId);
+}
+
+function showBubble(line) {
+  const now = bubbleClock;
+  bubbles.set(line.speaker, {
+    text: line.text,
+    listener: line.listener,
+    born: now,
+    expires: now + line.read_seconds + BUBBLE_LINGER_SECONDS,
+  });
+  // A reply replaces the line it answers: the server only sends it once
+  // that line has been up long enough to read, and two full bubbles side
+  // by side would overlap anyway.
+  const answered = line.listener && bubbles.get(line.listener);
+  if (answered && answered.listener === line.speaker) {
+    answered.expires = Math.min(answered.expires, now + BUBBLE_FADE_SECONDS);
+  }
+}
+
+function logOverheard(line) {
+  const row = document.createElement("div");
+  row.className = "line";
+  const who = document.createElement("span");
+  who.className = "who";
+  who.textContent = line.listener ? `${line.speaker} \u2192 ${line.listener}` : line.speaker;
+  row.append(who, document.createTextNode(` ${line.text}`));
+  if (line.ends_conversation) {
+    row.classList.add("goodbye");
+  }
+  appendOverheardRow(row);
+}
+
+// A line of narration in the Overheard panel -- a trade, an arrival --
+// rather than something someone said. `kind` becomes its CSS class.
+function logOverheardNote(text, kind) {
+  const row = document.createElement("div");
+  row.className = `line note ${kind}`;
+  row.textContent = text;
+  appendOverheardRow(row);
+}
+
+function appendOverheardRow(row) {
+  overheardLog.appendChild(row);
+  while (overheardLog.childElementCount > OVERHEARD_MAX_LINES) {
+    overheardLog.firstElementChild.remove();
+  }
+  overheardEl.classList.remove("hidden");
+  overheardLog.scrollTop = overheardLog.scrollHeight;
 }
 
 // Highest traveler_arrivals id already logged. null until the first poll,
@@ -180,6 +285,8 @@ function logTravelerArrivals(arrivals) {
   for (const arrival of arrivals) {
     if (arrival.id > lastTravelerId) {
       appendLogLine(`A traveler arrives at ${arrival.arrived_at}: ${arrival.identity.name}. ${arrival.identity.backstory}`, { system: true });
+      const why = arrival.purpose ? `, ${arrival.purpose.summary}` : "";
+      logOverheardNote(`${arrival.identity.name} arrives in town${why}.`, "arrival");
     }
   }
   lastTravelerId = Math.max(lastTravelerId, maxId);
@@ -276,6 +383,139 @@ function drawNpcIcon(entity, sx, sy, { nearby = false, opacity = 1, dashed = fal
   ctx.restore();
 }
 
+// Greedy word wrap to `maxWidth`, capped at `maxLines`; the last line gets
+// an ellipsis if anything was cut. Uses whatever font ctx currently has.
+function wrapText(text, maxWidth, maxLines) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = "";
+  let i = 0;
+  for (; i < words.length; i++) {
+    const candidate = current ? `${current} ${words[i]}` : words[i];
+    if (ctx.measureText(candidate).width <= maxWidth || !current) {
+      current = candidate;
+      continue;
+    }
+    lines.push(current);
+    current = words[i];
+    if (lines.length === maxLines) {
+      break;
+    }
+  }
+  if (lines.length < maxLines && current) {
+    lines.push(current);
+    current = "";
+    i = words.length;
+  }
+  if (i < words.length || current) {
+    let last = lines[lines.length - 1];
+    while (last && ctx.measureText(`${last}\u2026`).width > maxWidth) {
+      last = last.slice(0, -1);
+    }
+    lines[lines.length - 1] = `${last.trimEnd()}\u2026`;
+  }
+  return lines;
+}
+
+// A rounded speech bubble whose tail points down at the speaker (sx, sy).
+// `side` (-1, 0, 1) shifts the body left/right of the tail -- away from a
+// conversation partner, so the two sides' bubbles don't pile up on each
+// other.
+function drawBubble(npc, bubble, sx, sy, side) {
+  const age = bubbleClock - bubble.born;
+  const remaining = bubble.expires - bubbleClock;
+  const alpha = Math.max(0, Math.min(1, age / BUBBLE_FADE_SECONDS, remaining / BUBBLE_FADE_SECONDS));
+  if (alpha <= 0) {
+    return;
+  }
+
+  ctx.save();
+  ctx.globalAlpha = alpha * npc.opacity;
+  ctx.font = BUBBLE_FONT;
+  const lines = wrapText(bubble.text, BUBBLE_MAX_WIDTH - BUBBLE_PADDING * 2, BUBBLE_MAX_LINES);
+  const textWidth = Math.max(...lines.map((line) => ctx.measureText(line).width));
+  ctx.font = BUBBLE_NAME_FONT;
+  const nameWidth = ctx.measureText(npc.name).width;
+  const width = Math.ceil(Math.max(textWidth, nameWidth) + BUBBLE_PADDING * 2);
+  const height = BUBBLE_PADDING * 2 + BUBBLE_NAME_HEIGHT + lines.length * BUBBLE_LINE_HEIGHT;
+
+  const tipY = sy - NPC_RADIUS - 4;
+  const bottom = tipY - BUBBLE_TAIL;
+  const top = bottom - height;
+  const tailHalf = 6;
+  const corner = 8;
+  // Keep the tail at least a corner's width inside the body.
+  const shift = side * Math.max(0, width / 2 - corner - tailHalf - 4);
+  const left = sx - width / 2 + shift;
+  const right = left + width;
+
+  ctx.beginPath();
+  ctx.moveTo(left + corner, top);
+  ctx.arcTo(right, top, right, bottom, corner);
+  ctx.arcTo(right, bottom, left, bottom, corner);
+  ctx.lineTo(sx + tailHalf, bottom);
+  ctx.lineTo(sx, tipY);
+  ctx.lineTo(sx - tailHalf, bottom);
+  ctx.arcTo(left, bottom, left, top, corner);
+  ctx.arcTo(left, top, right, top, corner);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(245, 245, 240, 0.96)";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 2;
+  ctx.fill();
+  ctx.shadowColor = "transparent";
+
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.font = BUBBLE_NAME_FONT;
+  ctx.fillStyle = npc.isTraveler ? "#b86b00" : "#1565c0";
+  ctx.fillText(npc.name, left + BUBBLE_PADDING, top + BUBBLE_PADDING);
+  ctx.font = BUBBLE_FONT;
+  ctx.fillStyle = "#1b1b1b";
+  lines.forEach((line, index) => {
+    ctx.fillText(line, left + BUBBLE_PADDING, top + BUBBLE_PADDING + BUBBLE_NAME_HEIGHT + index * BUBBLE_LINE_HEIGHT);
+  });
+  ctx.restore();
+}
+
+function drawBubbles(width, height) {
+  const byName = new Map(npcs.map((npc) => [npc.name, npc]));
+  for (const [name, bubble] of bubbles) {
+    const npc = byName.get(name);
+    if (!npc || bubbleClock >= bubble.expires) {
+      bubbles.delete(name);
+      continue;
+    }
+    const partner = npc.talkingTo ? byName.get(npc.talkingTo) : null;
+    let side = 0;
+    if (partner) {
+      side = npc.x === partner.x ? (npc.name < partner.name ? -1 : 1) : Math.sign(npc.x - partner.x);
+    }
+    drawBubble(npc, bubble, width / 2 + (npc.x - camera.x), height / 2 + (npc.y - camera.y), side);
+  }
+}
+
+// A faint dashed link between each pair currently in conversation.
+function drawConversationLinks(width, height) {
+  const byName = new Map(npcs.map((npc) => [npc.name, npc]));
+  ctx.save();
+  ctx.setLineDash([3, 4]);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+  for (const npc of npcs) {
+    const partner = npc.talkingTo ? byName.get(npc.talkingTo) : null;
+    if (!partner || npc.name > partner.name) {
+      continue; // draw each pair once
+    }
+    ctx.beginPath();
+    ctx.moveTo(width / 2 + (npc.x - camera.x), height / 2 + (npc.y - camera.y));
+    ctx.lineTo(width / 2 + (partner.x - camera.x), height / 2 + (partner.y - camera.y));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawWorld() {
   const width = viewWidth;
   const height = viewHeight;
@@ -313,6 +553,8 @@ function drawWorld() {
     ctx.stroke();
   }
 
+  drawConversationLinks(width, height);
+
   for (const npc of npcs) {
     const sx = width / 2 + (npc.x - camera.x);
     const sy = height / 2 + (npc.y - camera.y);
@@ -341,6 +583,8 @@ function drawWorld() {
   ctx.fillStyle = "rgba(10, 30, 15, 0.85)";
   ctx.fill();
   ctx.restore();
+
+  drawBubbles(width, height);
 }
 
 let lastFrameTime = performance.now();
@@ -403,6 +647,7 @@ function tick(now) {
     }
 
     updateNpcs(dt);
+    bubbleClock += dt;
   }
 
   updateNearbyNPC();

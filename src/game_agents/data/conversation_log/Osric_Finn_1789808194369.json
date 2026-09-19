@@ -1,0 +1,91 @@
+[
+  {
+    "speaker": "Osric",
+    "listener": "Finn",
+    "stimulus": "You've walked up to Finn. Say your opening line.",
+    "utterance": "Finn. Show me today's catch, if you would.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Osric",
+    "stimulus": "Osric says: \"Finn. Show me today's catch, if you would.\"",
+    "utterance": "Oh! Uh, sure, sure, let me just -- yeah, got five fish here, decent size too, caught 'em right at first light when the tide was just turnin', which is always the best time, you know, before the sun gets too high and they all go deep and hidin' and--",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Osric",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Oh! Uh, sure, sure, let me just -- yeah, got five fish here, decent size too, caught 'em right at first light when the tide was just turnin', which is always the best time, you know, before the sun gets too high and they all go deep and hidin' and--\"",
+    "utterance": "Enough talk. Let me look at the gills and eyes.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Osric",
+    "stimulus": "Osric says: \"Enough talk. Let me look at the gills and eyes.\"",
+    "utterance": "Right, right, go ahead -- clear eyes, red gills, every one of 'em, I always check 'fore I even reel 'em in, well, not check exactly but you can tell by the way they fight, the fresher fighters got the--",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Osric",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Right, right, go ahead -- clear eyes, red gills, every one of 'em, I always check 'fore I even reel 'em in, well, not check exactly but you can tell by the way they fight, the fresher fighters got the--\"",
+    "utterance": "Acceptable quality. Ten coins for all five, final offer.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Osric",
+    "stimulus": "Osric says: \"Acceptable quality. Ten coins for all five, final offer.\"",
+    "utterance": "Ten for all five? Aw, c'mon Osric, I was thinkin' more like twelve, these are prime catch, first light and all -- but, uh, tell you what, twelve and I'll throw in a good word to the next traveler about your trades, eh? ...Or -- or eleven, split the difference, that work?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Osric",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Ten for all five? Aw, c'mon Osric, I was thinkin' more like twelve, these are prime catch, first light and all -- but, uh, tell you what, twelve and I'll throw in a good word to the next traveler about your trades, eh? ...Or -- or eleven, split the difference, that work?\"",
+    "utterance": "Eleven, then. Agreed.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Osric",
+    "stimulus": "Osric says: \"Eleven, then. Agreed.\"",
+    "utterance": null,
+    "action": {
+      "name": "sell_item",
+      "arguments": {
+        "item": "fish",
+        "buyer_name": "Osric",
+        "quantity": 5,
+        "total_price": 11
+      },
+      "result": "The trade didn't go through: Finn only has 3 x fish, not 5."
+    },
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Osric",
+    "stimulus": "(The trade didn't go through: Finn only has 3 x fish, not 5.) Now say your next line to Osric.",
+    "utterance": "Oh, uh, hold on now -- lemme recount, I coulda sworn -- ah, shoot, looks like it's only three, not five, guess I already set a couple aside earlier, my mistake. So, uh, three fish at that same rate, that'd be... call it seven coins for the three? Fair's fair.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Osric",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Oh, uh, hold on now -- lemme recount, I coulda sworn -- ah, shoot, looks like it's only three, not five, guess I already set a couple aside earlier, my mistake. So, uh, three fish at that same rate, that'd be... call it seven coins for the three? Fair's fair.\"",
+    "utterance": "Seven for three is steep. Six coins, and we're done.",
+    "action": null,
+    "ends_conversation": false
+  }
+]

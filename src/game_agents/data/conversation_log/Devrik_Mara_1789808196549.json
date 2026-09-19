@@ -1,0 +1,75 @@
+[
+  {
+    "speaker": "Devrik",
+    "listener": "Mara",
+    "stimulus": "You've walked up to Mara. Say your opening line.",
+    "utterance": "Need iron ingots. What's your price today?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Devrik",
+    "stimulus": "Devrik says: \"Need iron ingots. What's your price today?\"",
+    "utterance": "Five coins an ingot. Same as always, weather don't change iron prices.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Devrik",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Five coins an ingot. Same as always, weather don't change iron prices.\"",
+    "utterance": "Fair enough. Give me eight.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Devrik",
+    "stimulus": "Devrik says: \"Fair enough. Give me eight.\"",
+    "utterance": null,
+    "action": {
+      "name": "sell_item",
+      "arguments": {
+        "item": "iron ingots",
+        "buyer_name": "Devrik",
+        "quantity": 8,
+        "total_price": 40
+      },
+      "result": "The trade didn't go through: Mara only has 0 x iron ingots, not 8."
+    },
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Devrik",
+    "stimulus": "(The trade didn't go through: Mara only has 0 x iron ingots, not 8.) Now say your next line to Devrik.",
+    "utterance": "Hold on now - stock's empty. Sold my last batch yesterday. Got smelting to do before I can hand over eight.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Devrik",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Hold on now - stock's empty. Sold my last batch yesterday. Got smelting to do before I can hand over eight.\"",
+    "utterance": "How long till smelting's done? I can wait some.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Devrik",
+    "stimulus": "Devrik says: \"How long till smelting's done? I can wait some.\"",
+    "utterance": "Give me till this afternoon. Gate hinges for the mayor come first, then I'll fire up a batch for you. Come back by dusk, eight ingots'll be waiting.",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Devrik",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Give me till this afternoon. Gate hinges for the mayor come first, then I'll fire up a batch for you. Come back by dusk, eight ingots'll be waiting.\"",
+    "utterance": "Dusk it is. I'll rest nearby till then.",
+    "action": null,
+    "ends_conversation": true
+  }
+]

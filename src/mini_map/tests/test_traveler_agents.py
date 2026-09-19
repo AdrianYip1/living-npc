@@ -15,7 +15,7 @@ from game_agents.identity import Identity
 from game_agents.llm import SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
 from game_agents.registry import NPCRegistry
 from game_agents.storage import save_identities
-from game_agents.world import MAP_MAX, MAP_MIN
+from game_agents.world import MAP_MAX, MAP_MIN, PERSONAL_SPACE, distance
 
 from mini_map.simulation import Simulation
 
@@ -66,7 +66,7 @@ def _admit_one(sim: Simulation):
     env = sim._environment
     env._planned_arrivals = [env.elapsed_minutes + env.minutes_per_tick]
     sim._advance_environment()
-    sim.wait_for_pending_travelers()
+    sim.wait_for_pending()
     (traveler,) = sim._registry.travelers()
     return traveler, sim._traveler_state[traveler.identity.name]
 
@@ -75,7 +75,7 @@ def _walk(sim: Simulation, seconds: float) -> None:
     for _ in range(int(seconds * 30)):
         sim._registry.step_movement(1 / 30, holding=set(sim._turns_in_flight))
         sim._update_travelers()
-        sim.wait_for_pending_travelers()
+        sim.wait_for_pending()
 
 
 def _on_edge(point) -> bool:
@@ -132,9 +132,10 @@ class TravelerAgentTests(unittest.TestCase):
             _walk(sim, 10)
 
             self.assertTrue(any(s.startswith("You notice someone nearby: Mara") for s in llm.stimuli))
-            # It went over to Mara instead of leaving: still in town, near her.
+            # It went over to Mara instead of leaving: still in town, next
+            # to her (stopping short of her spot -- see keep_personal_space).
             self.assertIsNotNone(sim._registry.get(traveler.identity.name))
-            self.assertLess(abs(traveler.position[0] - mara.position[0]) + abs(traveler.position[1] - mara.position[1]), 2)
+            self.assertLessEqual(distance(traveler.position, mara.position), PERSONAL_SPACE + 1)
 
     def test_each_person_is_noticed_only_once(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -209,7 +210,7 @@ class TravelerAgentTests(unittest.TestCase):
             for _ in range(Simulation.TRAVELER_IDLE_TURN_MINUTES):
                 sim._environment.tick()
             sim._update_travelers()
-            sim.wait_for_pending_travelers()
+            sim.wait_for_pending()
 
             self.assertEqual(len(llm.stimuli), before + 1)
             self.assertTrue(llm.stimuli[-1].startswith("You're standing at"))
@@ -245,45 +246,3 @@ class TravelerAgentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-_FORGE = {"name": "The Forge", "position": [12, -30], "description": "Hot and loud."}
-_DOCKS = {"name": "The Docks", "position": [70, 45], "description": "Wet and windy."}
-
-
-class TravelerVisitTests(unittest.TestCase):
-    def test_traveler_is_told_to_visit_one_of_the_places(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            llm = _TravelerLLM()
-            sim = _sim(tmp, llm, places=[_FORGE, _DOCKS])
-            traveler, st = _admit_one(sim)
-
-            self.assertIn(st.visit, (_FORGE, _DOCKS))
-            place = f"{st.visit['name']} at ({st.visit['position'][0]}, {st.visit['position'][1]})"
-            self.assertIn(f"you want to pay a visit to {place}", traveler.standing_context)
-            self.assertIn(f"You still want to visit {place}", llm.stimuli[0])
-
-    def test_both_places_get_picked_across_travelers(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            sim = _sim(tmp, _TravelerLLM(), places=[_FORGE, _DOCKS])
-            picks = {sim._rng.choice(sim._registry.places)["name"] for _ in range(50)}
-            self.assertEqual(picks, {"The Forge", "The Docks"})
-
-    def test_reaching_the_place_marks_it_visited(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            sim = _sim(tmp, _TravelerLLM(), places=[_FORGE])
-            traveler, st = _admit_one(sim)
-            traveler.position = (12.0, -30.0)
-            traveler.destination = None
-
-            sim._update_travelers()
-
-            self.assertTrue(st.visited)
-            self.assertEqual(st.visit_reminder(), " You've already visited The Forge.")
-
-    def test_no_places_means_no_visit(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            sim = _sim(tmp, _TravelerLLM())
-            traveler, st = _admit_one(sim)
-            self.assertIsNone(st.visit)
-            self.assertNotIn("visit", traveler.standing_context)

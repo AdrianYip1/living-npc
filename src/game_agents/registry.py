@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from .agent import Agent
-from .conversation import run_conversation, save_transcript
+from .conversation import ConversationHooks, run_conversation, save_transcript
 from .identity import DEFAULT_PROFILE_TEMPLATE
 from .inventory import TradeError, trade
 from .llm import LLMClient
@@ -23,18 +23,24 @@ from .storage import (
     save_memory,
 )
 from .tools import Tool, ToolRegistry, make_wait_tool
-from .world import INTERACTION_RANGE, clamp_coordinate, distance, step_toward
+from .world import INTERACTION_RANGE, clamp_coordinate, distance, keep_personal_space, step_toward
 
-# initiate_conversation's result on success -- every refusal (unknown name,
-# out of range, busy) returns something else. See conversation_happened().
+# initiate_conversation's result on success -- the first when the exchange
+# ran inline, the second when it was handed off to ConversationHooks.run and
+# is still going. Every refusal (unknown name, out of range, busy) returns
+# something else. See conversation_happened().
 CONVERSATION_HAPPENED_PREFIX = "You had a conversation with "
+CONVERSATION_STARTED_PREFIX = "You start a conversation with "
 
 
 def conversation_happened(tool_result: object) -> bool:
-    """Whether an initiate_conversation call actually ran an exchange, for
-    callers (the world tick) that only see the tool's result string.
+    """Whether an initiate_conversation call actually started an exchange
+    (finished or still running), for callers (the world tick) that only see
+    the tool's result string.
     """
-    return isinstance(tool_result, str) and tool_result.startswith(CONVERSATION_HAPPENED_PREFIX)
+    return isinstance(tool_result, str) and tool_result.startswith(
+        (CONVERSATION_HAPPENED_PREFIX, CONVERSATION_STARTED_PREFIX)
+    )
 
 
 class NPCRegistry:
@@ -89,6 +95,13 @@ class NPCRegistry:
         self._trade_lock = threading.Lock()
         self._conversation_log_dir = Path(conversation_log_dir) if conversation_log_dir else None
         self._busy: set[str] = set()
+        # Who each NPC in an NPC-to-NPC conversation is talking to, both
+        # ways round. Guarded by _busy_lock along with _busy.
+        self._partners: dict[str, str] = {}
+        # How exchanges are run, paced, and watched -- see ConversationHooks.
+        # Left at the defaults (inline, unwatched) unless someone like
+        # mini_map.Simulation fills it in.
+        self.conversation_hooks = ConversationHooks()
         # Guards _busy and roster changes together, so "is this traveler
         # free to leave?" and "claim them for a conversation" can't race.
         self._busy_lock = threading.RLock()
@@ -216,6 +229,12 @@ class NPCRegistry:
     def is_busy(self, name: str) -> bool:
         return name in self._busy
 
+    def partner_of(self, name: str) -> str | None:
+        """Who `name` is in an NPC-to-NPC conversation with right now, if
+        anyone. None while talking to the player -- see try_occupy().
+        """
+        return self._partners.get(name)
+
     def try_occupy_pair(self, a_name: str, b_name: str) -> bool:
         """Claims both names at once, or neither. Also what stops a
         conversation from re-initiating mid-exchange: a side already busy
@@ -231,12 +250,16 @@ class NPCRegistry:
                 return False
             self._busy.add(a_name)
             self._busy.add(b_name)
+            if a_name != b_name:
+                self._partners[a_name], self._partners[b_name] = b_name, a_name
             return True
 
     def release_pair(self, a_name: str, b_name: str) -> None:
         with self._busy_lock:
             self._busy.discard(a_name)
             self._busy.discard(b_name)
+            self._partners.pop(a_name, None)
+            self._partners.pop(b_name, None)
 
     def try_occupy(self, name: str) -> bool:
         """Single-participant version of try_occupy_pair -- for a
@@ -283,16 +306,32 @@ class NPCRegistry:
                 return too_far
             if not self.try_occupy_pair(initiator_name, resolved_name):
                 return f"{resolved_name} is busy right now."
-            try:
-                transcript = run_conversation(self.get(initiator_name), target, turns=turns)
-                if self._conversation_log_dir is not None:
-                    log_path = (
-                        self._conversation_log_dir / f"{initiator_name}_{resolved_name}_{int(time.time() * 1000)}.json"
+            initiator = self.get(initiator_name)
+            hooks = self.conversation_hooks
+
+            def exchange() -> None:
+                try:
+                    transcript = run_conversation(
+                        initiator, target, turns=turns, scene=hooks.scene, on_turn=hooks.on_turn
                     )
-                    save_transcript(transcript, log_path)
-            finally:
+                    if self._conversation_log_dir is not None:
+                        log_path = (
+                            self._conversation_log_dir
+                            / f"{initiator_name}_{resolved_name}_{int(time.time() * 1000)}.json"
+                        )
+                        save_transcript(transcript, log_path)
+                    if hooks.on_end is not None:
+                        hooks.on_end(transcript)
+                finally:
+                    self.release_pair(initiator_name, resolved_name)
+
+            if hooks.run is None:
+                exchange()
+                return f"{CONVERSATION_HAPPENED_PREFIX}{resolved_name}."
+            if not hooks.run(exchange):
                 self.release_pair(initiator_name, resolved_name)
-            return f"{CONVERSATION_HAPPENED_PREFIX}{resolved_name}."
+                return f"You can't talk to {resolved_name} right now."
+            return f"{CONVERSATION_STARTED_PREFIX}{resolved_name}."
 
         return Tool(
             name="initiate_conversation",
@@ -314,8 +353,16 @@ class NPCRegistry:
             if agent is None:
                 return "You've already left town."
             clamped = (clamp_coordinate(int(x)), clamp_coordinate(int(y)))
-            agent.destination = clamped
-            return f"You start walking to ({clamped[0]}, {clamped[1]})."
+            others = [
+                point
+                for other in self.all()
+                if other is not agent
+                for point in (other.position, other.destination)
+                if point is not None
+            ]
+            destination = keep_personal_space(clamped, agent.position, others)
+            agent.destination = destination
+            return f"You start walking to ({destination[0]}, {destination[1]})."
 
         return Tool(
             name="move_to",

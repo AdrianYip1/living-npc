@@ -18,6 +18,10 @@ SPEAK_TOOL_SCHEMA: dict[str, Any] = {
     },
 }
 
+# Extra speak-tool field offered only on NPC-to-NPC conversation turns (see
+# Agent.respond's `conversation`): the speaker marking a line as a goodbye.
+ENDS_CONVERSATION_FIELD = "ends_conversation"
+
 
 @dataclass
 class ToolCall:

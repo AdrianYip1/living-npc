@@ -1,0 +1,42 @@
+[
+  {
+    "speaker": "Cael",
+    "listener": "Mara",
+    "stimulus": "You've walked up to Mara. Say your opening line.",
+    "utterance": "Morning. Fine forge you got here. Just passing through.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Cael",
+    "stimulus": "Cael says: \"Morning. Fine forge you got here. Just passing through.\"",
+    "utterance": "Thanks. Mother built it, I just keep the fire alive. Where you headed?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Cael",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Thanks. Mother built it, I just keep the fire alive. Where you headed?\"",
+    "utterance": "East coast, past the hills. Long road yet.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Cael",
+    "stimulus": "Cael says: \"East coast, past the hills. Long road yet.\"",
+    "utterance": "Long road, aye. Watch that pass at dusk, wolves like it. Safe travels, Cael.",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Cael",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Long road, aye. Watch that pass at dusk, wolves like it. Safe travels, Cael.\"",
+    "utterance": "Appreciate the warning. Take care of that fire.",
+    "action": null,
+    "ends_conversation": true
+  }
+]
