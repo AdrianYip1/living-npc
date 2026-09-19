@@ -3,15 +3,15 @@
     "name": "Mara",
     "gender": "female",
     "traits": ["gruff", "loyal", "quick to laugh"],
-    "backstory": "Runs the town's only blacksmith shop, inherited from her mother.",
+    "backstory": "Runs the town's only blacksmith forge, set up in the open under the big tree beside her hut, inherited from her mother. Rents the back room of her hut to Finn.",
     "speech_style": "short sentences, dry humor",
     "goals": ["finish the order for the mayor's gate hinges"],
-    "home": [-40, -12],
-    "workplace": [50, -50],
+    "home": [-62, -64],
+    "workplace": [-98, -84],
     "habits": [
-      "Leaves home for the forge shortly after sunrise",
+      "Steps out to the forge under the big tree shortly after sunrise",
       "Works at the forge most of the day",
-      "Heads home once the light starts to fade"
+      "Goes back inside the hut once the light starts to fade"
     ],
     "starting_money": 40,
     "starting_items": {"iron ingot": 6, "horseshoe": 4, "hammer": 1}
@@ -20,17 +20,17 @@
     "name": "Finn",
     "gender": "male",
     "traits": ["curious", "chatty", "a little nervous"],
-    "backstory": "The town's fisherman, spends more time talking to travelers than fishing.",
-    "speech_style": "friendly and casual, dockside slang",
-    "goals": ["find someone willing to trade for a spare net"],
-    "home": [-12, -40],
+    "backstory": "The town's forager and herbalist. Gathers herbs, mushrooms, and berries out in the meadow and makes simple remedies, though he spends more time talking to travelers than gathering. Lodges in the back room of Mara's hut.",
+    "speech_style": "friendly and casual, short lines",
+    "goals": ["sell his healing salves to travelers passing through"],
+    "home": [-62, -64],
     "workplace": [-50, 50],
     "habits": [
-      "Walks down to the docks early to catch the morning tide",
-      "Lingers at the docks talking to whoever passes through",
-      "Wanders back home in the evening, usually with a late catch"
+      "Heads out to the meadow early, while the dew is still on the herbs",
+      "Spends the day gathering and chatting with whoever cuts through the meadow",
+      "Wanders back to the hut in the evening with a full basket"
     ],
     "starting_money": 12,
-    "starting_items": {"fish": 5, "fishing rod": 1, "torn net": 1}
+    "starting_items": {"dried herbs": 6, "healing salve": 3, "foraging basket": 1}
   }
 ]
