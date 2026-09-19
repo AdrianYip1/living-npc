@@ -93,10 +93,8 @@ void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapch
 	vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.getGraphicsPipeline());
-	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-							pipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
 	model.bind(commandBuffer);
-	model.draw(commandBuffer);
+	model.draw(commandBuffer, pipeline.getPipelineLayout(), descriptorSet, 0);
 
 	ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
 

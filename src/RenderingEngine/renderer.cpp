@@ -15,11 +15,10 @@ HTN::Renderer::Renderer(Window& _window) :
 	drawing(device, pipeline),
 	uniform(device) {
 
-	std::vector<Vertex> vertices;
-	std::vector<u32> indices;
-	Loader::loadModel("models/face1.gltf", vertices, indices);
+	fModel fmodel;
+	Loader::loadModel("models/face1.gltf", fmodel);
 
-	Model::createModel(device, vertices, indices, &model);
+	Model::createModel(device, std::move(fmodel), &model);
 	createDescriptors();
 	initImGui();
 	createSyncObjects();
@@ -72,6 +71,7 @@ void HTN::Renderer::drawFrame() {
 
 	uniform.updateUniformBuffer(currentFrame, ubo);
 	uniform.updateLightBuffer(currentFrame, light);
+	uniform.updateWeightBuffer(currentFrame, faceWeights);
 
 	ImGui_ImplVulkan_NewFrame();
 	ImGui_ImplGlfw_NewFrame();
@@ -83,6 +83,30 @@ void HTN::Renderer::drawFrame() {
 	ImGui::Begin("UI", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
 	ImGui::SliderFloat3("Direction", &light.direction.x, -1.0f, 1.0f);
 	ImGui::ColorEdit3("Color", &light.color.x);
+
+	static const char* weightNames[] = {
+		"eyeLookDownLeft", "eyeLookInLeft", "eyeLookOutLeft", "eyeLookUpLeft",
+		"eyeLookDownRight", "eyeLookInRight", "eyeLookOutRight", "eyeLookUpRight",
+		"eyeBlinkLeft", "eyeLookDownLeft", "eyeLookInLeft", "eyeLookOutLeft", "eyeLookUpLeft",
+		"eyeSquintLeft", "eyeWideLeft", "eyeBlinkRight", "eyeLookDownRight", "eyeLookInRight",
+		"eyeLookOutRight", "eyeLookUpRight", "eyeSquintRight", "eyeWideRight", "jawForward",
+		"jawLeft", "jawRight", "jawOpen", "mouthClose", "mouthFunnel", "mouthPucker",
+		"mouthRight", "mouthLeft", "mouthSmileLeft", "mouthSmileRight", "mouthFrownLeft",
+		"mouthFrownRight", "mouthDimpleLeft", "mouthDimpleRight", "mouthStretchLeft",
+		"mouthStretchRight", "mouthRollLower", "mouthRollUpper", "mouthShrugLower",
+		"mouthShrugUpper", "mouthPressLeft", "mouthPressRight", "mouthLowerDownLeft",
+		"mouthLowerDownRight", "mouthUpperUpLeft", "mouthUpperUpRight", "browDownLeft",
+		"browDownRight", "browInnerUp", "browOuterUpLeft", "browOuterUpRight", "cheekPuff",
+		"cheekSquintLeft", "cheekSquintRight", "noseSneerLeft", "noseSneerRight",
+		"jawForward (teeth)", "jawLeft (teeth)", "jawRight (teeth)", "jawOpen (teeth)", "mouthClose (teeth)"
+	};
+	if (ImGui::CollapsingHeader("Morph Weights")) {
+		for (int i = 0; i < (int)(sizeof(weightNames) / sizeof(weightNames[0])); i++) {
+			std::string label = "[" + std::to_string(i) + "] " + weightNames[i];
+			ImGui::SliderFloat(label.c_str(), &faceWeights[i], 0.0f, 1.0f);
+		}
+	}
+
 	ImGui::End();
 
 	ImGui::Render();
@@ -161,14 +185,18 @@ void HTN::Renderer::createSyncObjects() {
 
 void HTN::Renderer::createDescriptors() {
 	Descriptor::createDescriptorPool(device,
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
 		descriptorPool);
 
+	VkBuffer deltasBuffer = model.getDeltasBuffer();
 	Descriptor::createDescriptorSets(device,
 		pipeline.getUboSetLayout(),
 		descriptorPool,
-		{uniform.getUniformBuffers(), uniform.getLightUniformBuffers()},
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+		{uniform.getUniformBuffers(), uniform.getLightUniformBuffers(),
+		 {deltasBuffer, deltasBuffer}, uniform.getWeightBuffers()},
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
 		descriptorSets);
 }
 

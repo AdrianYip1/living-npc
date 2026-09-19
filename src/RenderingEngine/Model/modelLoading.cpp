@@ -8,9 +8,7 @@
 #include <cstring>
 #include <stdexcept>
 
-bool HTN::Loader::loadModel(const std::string& modelPath,
-							std::vector<Vertex>& vertices,
-							std::vector<u32>& indices) {
+bool HTN::Loader::loadModel(const std::string& modelPath, fModel& out) {
 	cgltf_options options = {};
 	cgltf_data* data = nullptr;
 
@@ -23,17 +21,18 @@ bool HTN::Loader::loadModel(const std::string& modelPath,
 		throw std::runtime_error("Failed to load gltf buffers: " + modelPath);
 	}
 
+	u32 weightBase = 0;
 	for (cgltf_size i = 0; i < data->scene->nodes_count; i++) {
-		recurseNodes(data->scene->nodes[i], vertices, indices);
+		recurseNodes(data->scene->nodes[i], out, weightBase);
 	}
 
 	cgltf_free(data);
 	return true;
 }
 
-void HTN::Loader::recurseNodes(cgltf_node* node,
-							   std::vector<Vertex>& vertices,
-							   std::vector<u32>& indices) {
+void HTN::Loader::recurseNodes(cgltf_node* node, fModel& out, u32& weightBase) {
+	u32 meshTargetCount = 0;
+
 	if (node->mesh) {
 		f32 worldCoord[16];
 		cgltf_node_transform_world(node, worldCoord);
@@ -60,7 +59,9 @@ void HTN::Loader::recurseNodes(cgltf_node* node,
 			}
 
 			if (!posAccessor) continue;
-			u32 vertexOffset = static_cast<u32>(vertices.size());
+
+			u32 indexStart = static_cast<u32>(out.indices.size());
+			u32 vertexOffset = static_cast<u32>(out.vertices.size());
 			cgltf_size posCount = posAccessor->count;
 
 			for (cgltf_size p = 0; p < posCount; p++) {
@@ -79,24 +80,55 @@ void HTN::Loader::recurseNodes(cgltf_node* node,
 				}
 
 				vertex.color = {0.8f, 0.8f, 0.8f};
-				vertices.push_back(vertex);
+				out.vertices.push_back(vertex);
 			}
 
 			if (primitive->indices) {
 				cgltf_size indexCount = primitive->indices->count;
 				for (cgltf_size k = 0; k < indexCount; k++) {
 					cgltf_size index = cgltf_accessor_read_index(primitive->indices, k);
-					indices.push_back(static_cast<u32>(index) + vertexOffset);
+					out.indices.push_back(static_cast<u32>(index) + vertexOffset);
 				}
 			} else {
 				for (cgltf_size k = 0; k < posCount; k++) {
-					indices.push_back(static_cast<u32>(k) + vertexOffset);
+					out.indices.push_back(static_cast<u32>(k) + vertexOffset);
+				}
+			}
+
+			u32 indexCount = static_cast<u32>(out.indices.size()) - indexStart;
+
+			cgltf_size targetCount = primitive->targets_count;
+			meshTargetCount = static_cast<u32>(targetCount);
+			u32 morphStartIndex = targetCount > 0 ? static_cast<u32>(out.deltas.size()) : (u32)-1;
+
+			out.primitives.push_back({ indexStart, indexCount, morphStartIndex, static_cast<u32>(targetCount),
+									   vertexOffset, static_cast<u32>(posCount), weightBase });
+
+			for (cgltf_size t = 0; t < targetCount; t++) {
+				cgltf_morph_target& target = primitive->targets[t];
+				cgltf_accessor* posTargetAccessor = nullptr;
+
+				for (cgltf_size a = 0; a < target.attributes_count; a++) {
+					if (target.attributes[a].type == cgltf_attribute_type_position) {
+						posTargetAccessor = target.attributes[a].data;
+					}
+				}
+
+				if (!posTargetAccessor) continue;
+				for (cgltf_size d = 0; d < posTargetAccessor->count; d++) {
+					enginemath::Vec3 delta;
+					cgltf_accessor_read_float(posTargetAccessor, d, delta.elements, 3);
+
+					enginemath::Vec4 wd = worldTransform * enginemath::Vec4::toVec4Dir(delta);
+					out.deltas.push_back(wd);
 				}
 			}
 		}
 	}
 
+	weightBase += meshTargetCount;
+
 	for (cgltf_size i = 0; i < node->children_count; i++) {
-		recurseNodes(node->children[i], vertices, indices);
+		recurseNodes(node->children[i], out, weightBase);
 	}
 }

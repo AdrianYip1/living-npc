@@ -31,5 +31,6 @@ namespace HTN {
 	using f64 = double;
 
 	const u32 MAX_FRAMES_IN_FLIGHT = 2;
+	const u32 MAX_WEIGHTS = 128;
 
 } // namespace HTN

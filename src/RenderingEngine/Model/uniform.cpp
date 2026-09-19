@@ -10,6 +10,8 @@ HTN::Uniform::~Uniform() {
 		vkFreeMemory(device.getDevice(), uniformBuffersMemory[i], nullptr);
 		vkDestroyBuffer(device.getDevice(), lightUniformBuffers[i], nullptr);
 		vkFreeMemory(device.getDevice(), lightUniformBuffersMemory[i], nullptr);
+		vkDestroyBuffer(device.getDevice(), weightStorageBuffers[i], nullptr);
+		vkFreeMemory(device.getDevice(), weightStorageBuffersMemory[i], nullptr);
 	}
 }
 
@@ -41,6 +43,21 @@ void HTN::Uniform::createUniformBuffers() {
 							 lightUniformBuffers[i], lightUniformBuffersMemory[i]);
 		vkMapMemory(device.getDevice(), lightUniformBuffersMemory[i], 0, lightBufferSize, 0, &lightUniformBuffersMapped[i]);
 	}
+
+	VkDeviceSize weightBufferSize = sizeof(f32) * MAX_WEIGHTS;
+
+	weightStorageBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+	weightStorageBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+	weightStorageBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+		Buffer::createBuffer(device, weightBufferSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+							 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+							 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+							 weightStorageBuffers[i], weightStorageBuffersMemory[i]);
+		vkMapMemory(device.getDevice(), weightStorageBuffersMemory[i], 0, weightBufferSize, 0, &weightStorageBuffersMapped[i]);
+		memset(weightStorageBuffersMapped[i], 0, weightBufferSize);
+	}
 }
 
 void HTN::Uniform::updateUniformBuffer(u32 currentImage, const UBO& ubo) {
@@ -49,4 +66,8 @@ void HTN::Uniform::updateUniformBuffer(u32 currentImage, const UBO& ubo) {
 
 void HTN::Uniform::updateLightBuffer(u32 currentImage, const LightUBO& light) {
 	memcpy(lightUniformBuffersMapped[currentImage], &light, sizeof(LightUBO));
+}
+
+void HTN::Uniform::updateWeightBuffer(u32 currentImage, const std::vector<f32>& weights) {
+	memcpy(weightStorageBuffersMapped[currentImage], weights.data(), sizeof(f32) * weights.size());
 }

@@ -34,6 +34,7 @@ namespace HTN {
 		std::vector<VkDescriptorSet> descriptorSets;
 
 		LightUBO light;
+		std::vector<f32> faceWeights = std::vector<f32>(MAX_WEIGHTS, 0.0f);
 
 		u32 currentFrame = 0;
 

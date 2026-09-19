@@ -2,6 +2,8 @@
 #include <vulkan/vulkan.h>
 #include "enginemath/vec2.hpp"
 #include "enginemath/vec3.hpp"
+#include "enginemath/vec4.hpp"
+#include "enginemath/mat4.hpp"
 
 #include "../../defines.hpp"
 #include "../device.hpp"
@@ -9,6 +11,7 @@
 
 #include <vector>
 #include <array>
+#include <string>
 
 namespace HTN {
 	struct Vertex {
@@ -52,6 +55,33 @@ namespace HTN {
 		}
 	};
 
+	struct submesh {
+		u32 indexStart;
+		u32 indexCount;
+		u32 morphStartIndex = (u32)-1;
+		u32 targetCount = 0;
+		u32 vertexOffset = 0;
+		u32 vertexCount = 0;
+		u32 weightsStartIndex = 0;
+	};
+
+	struct MorphPush {
+		enginemath::Mat4 model;
+		u32 morphStartIndex;
+		u32 targetCount;
+		u32 vertexOffset;
+		u32 vertexCount;
+		u32 weightsStartIndex;
+		u32 weightBase;
+	};
+
+	struct fModel {
+		std::vector<Vertex> vertices;
+		std::vector<u32> indices;
+		std::vector<submesh> primitives;
+		std::vector<enginemath::Vec4> deltas;
+	};
+
 	class Model {
 	public:
 		Model() = default;
@@ -59,24 +89,27 @@ namespace HTN {
 		Model(const Model&) = delete;
 		Model& operator=(const Model&) = delete;
 
-		static bool createModel(Device& device, const std::vector<Vertex>& vertices,
-								const std::vector<u32>& indices, Model* model);
+		static bool createModel(Device& device, fModel model, Model* fmodel);
 
 		void bind(VkCommandBuffer commandBuffer);
-		void draw(VkCommandBuffer commandBuffer);
+		void draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, VkDescriptorSet descriptorSet, u32 weightBase);
 
-		u32 getIndexCount() const { return indexCount; }
+		VkBuffer getDeltasBuffer() { return deltasBuffer; }
 
 	private:
 		Device* device = nullptr;
-		u32 indexCount = 0;
 
 		VkBuffer vertexBuffer = VK_NULL_HANDLE;
 		VkDeviceMemory vertexBufferMemory = VK_NULL_HANDLE;
 		VkBuffer indexBuffer = VK_NULL_HANDLE;
 		VkDeviceMemory indexBufferMemory = VK_NULL_HANDLE;
+		VkBuffer deltasBuffer = VK_NULL_HANDLE;
+		VkDeviceMemory deltasBufferMemory = VK_NULL_HANDLE;
 
-		void createVertexBuffer(const std::vector<Vertex>& vertices);
-		void createIndexBuffer(const std::vector<u32>& indices);
+		fModel model;
+
+		void createVertexBuffer();
+		void createIndexBuffer();
+		void createDeltasBuffer();
 	};
 } // namespace HTN

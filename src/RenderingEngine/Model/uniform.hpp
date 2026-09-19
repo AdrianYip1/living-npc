@@ -31,8 +31,10 @@ namespace HTN {
 
 		void updateUniformBuffer(u32 currentImage, const UBO& ubo);
 		void updateLightBuffer(u32 currentImage, const LightUBO& light);
+		void updateWeightBuffer(u32 currentImage, const std::vector<f32>& weights);
 		std::vector<VkBuffer> getUniformBuffers() { return uniformBuffers; }
 		std::vector<VkBuffer> getLightUniformBuffers() { return lightUniformBuffers; }
+		std::vector<VkBuffer> getWeightBuffers() { return weightStorageBuffers; }
 
 	private:
 		Device& device;
@@ -44,6 +46,10 @@ namespace HTN {
 		std::vector<VkBuffer> lightUniformBuffers;
 		std::vector<VkDeviceMemory> lightUniformBuffersMemory;
 		std::vector<void*> lightUniformBuffersMapped;
+
+		std::vector<VkBuffer> weightStorageBuffers;
+		std::vector<VkDeviceMemory> weightStorageBuffersMemory;
+		std::vector<void*> weightStorageBuffersMapped;
 
 		void createUniformBuffers();
 	};
