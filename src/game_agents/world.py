@@ -55,41 +55,47 @@ def render_surroundings(me: tuple[float, float], others: list[tuple[str, tuple[f
     return "\n".join(lines)
 
 
-# How close (map units) one NPC stops to another -- well inside
-# INTERACTION_RANGE, so walking up to someone still gets you close enough to
-# talk, but far enough apart that the two don't draw on top of each other.
-PERSONAL_SPACE = 4
+# How close (map units) one NPC stops to another: a little more than an
+# icon's width on the mini-map (NPC_RADIUS 16px / WORLD_SCALE 6, doubled,
+# in mini_map/static/app.js), so neighbors never draw on top of each other,
+# yet still inside INTERACTION_RANGE -- walking up to someone gets you
+# close enough to talk.
+PERSONAL_SPACE = 7
 
 
 def keep_personal_space(
     destination: tuple[int, int], start: tuple[float, float], others: list[tuple[float, float]]
 ) -> tuple[int, int]:
-    """`destination`, moved just far enough (PERSONAL_SPACE) from each point
-    in `others` -- where other NPCs stand or are headed -- that the walker
-    won't end up on top of anyone. Each push is back toward `start`, so
-    walking up to someone stops in front of them, on your side.
+    """`destination`, unless it's crowded -- someone in `others` (where other
+    NPCs stand or are headed) is within PERSONAL_SPACE of it. Then the
+    closest free spot on a ring PERSONAL_SPACE out from it, starting on the
+    walker's side (coming from `start`) and working around both ways: a
+    second visitor to someone stands beside the first, not on them, and
+    both stay in talking range of whoever they came to see. If the whole
+    ring is taken, the spot on it with the most room.
     """
-    x, y = float(destination[0]), float(destination[1])
-    for _ in range(3):  # a push away from one person can land near another
-        crowded = False
-        for ox, oy in others:
-            gap = math.hypot(x - ox, y - oy)
-            if gap >= PERSONAL_SPACE - 0.5:
-                continue
-            crowded = True
-            # Straight out from them -- or, when aiming right at their
-            # spot, back toward where the walker's coming from (or any
-            # fixed direction if the walker is standing there too).
-            dx, dy = x - ox, y - oy
-            if math.hypot(dx, dy) < 1e-6:
-                dx, dy = start[0] - ox, start[1] - oy
-            if math.hypot(dx, dy) < 1e-6:
-                dx, dy = 1.0, 0.0
-            norm = math.hypot(dx, dy)
-            x, y = ox + dx / norm * PERSONAL_SPACE, oy + dy / norm * PERSONAL_SPACE
-        if not crowded:
-            break
-    return clamp_coordinate(round(x)), clamp_coordinate(round(y))
+
+    def room(point: tuple[float, float]) -> float:
+        return min((math.hypot(point[0] - ox, point[1] - oy) for ox, oy in others), default=math.inf)
+
+    if room(destination) >= PERSONAL_SPACE - 0.5:
+        return destination
+    tx, ty = destination
+    base = math.atan2(start[1] - ty, start[0] - tx) if math.hypot(start[0] - tx, start[1] - ty) > 1e-6 else 0.0
+    candidates = []
+    for step in range(7):  # 30-degree steps, both ways round: the full ring
+        for sign in ((1,) if step in (0, 6) else (1, -1)):
+            angle = base + sign * step * math.pi / 6
+            candidates.append(
+                (
+                    clamp_coordinate(round(tx + PERSONAL_SPACE * math.cos(angle))),
+                    clamp_coordinate(round(ty + PERSONAL_SPACE * math.sin(angle))),
+                )
+            )
+    for candidate in candidates:
+        if room(candidate) >= PERSONAL_SPACE - 0.5:
+            return candidate
+    return max(candidates, key=room)
 
 
 # NPC walking physics, in map units -- the player's own MAX_SPEED / ACCEL /
@@ -99,6 +105,11 @@ def keep_personal_space(
 NPC_MAX_SPEED = 260 / 6  # map units/sec
 NPC_ACCEL = 900 / 6  # map units/sec^2 while speeding up / turning
 NPC_DECEL = 1400 / 6  # map units/sec^2 while braking
+# While an NPC is deciding what to do mid-walk (see NPCRegistry.
+# step_movement), it slows to this fraction of NPC_MAX_SPEED rather than
+# stopping dead -- a glance, not a freeze. Mirrored as HESITATE_SPEED_FACTOR
+# in mini_map/static/app.js; keep the two in sync.
+HESITATE_SPEED_FACTOR = 0.25
 
 
 def step_toward(
@@ -106,6 +117,7 @@ def step_toward(
     velocity: tuple[float, float],
     destination: tuple[float, float] | None,
     dt: float,
+    max_speed: float = NPC_MAX_SPEED,
 ) -> tuple[tuple[float, float], tuple[float, float], bool]:
     """One physics step of walking toward `destination` (or coasting to a
     stop if it's None), with the same momentum the player has: velocity
@@ -132,7 +144,7 @@ def step_toward(
         return (float(destination[0]), float(destination[1])), (0.0, 0.0), True
 
     # Fastest speed that can still brake to zero within `dist`.
-    desired_speed = min(NPC_MAX_SPEED, math.sqrt(2 * NPC_DECEL * dist))
+    desired_speed = min(max_speed, math.sqrt(2 * NPC_DECEL * dist))
     want_x, want_y = to_x / dist * desired_speed, to_y / dist * desired_speed
     dvx, dvy = want_x - vx, want_y - vy
     dv = math.hypot(dvx, dvy)

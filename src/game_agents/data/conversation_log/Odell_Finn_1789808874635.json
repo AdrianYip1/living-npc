@@ -1,0 +1,74 @@
+[
+  {
+    "speaker": "Odell",
+    "listener": "Finn",
+    "stimulus": "You've walked up to Finn. Say your opening line.",
+    "utterance": "Morning. Heard you sell fishing rods. Got one to spare?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Odell",
+    "stimulus": "Odell says: \"Morning. Heard you sell fishing rods. Got one to spare?\"",
+    "utterance": "Oh! Aye, mornin' to you too - yeah, I've, uh, I've got one rod I could part with, good sturdy thing, used it myself for a season or two but it's still got plenty life in it. Were you looking to do some fishing round here, or, uh, passing through?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Odell",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Oh! Aye, mornin' to you too - yeah, I've, uh, I've got one rod I could part with, good sturdy thing, used it myself for a season or two but it's still got plenty life in it. Were you looking to do some fishing round here, or, uh, passing through?\"",
+    "utterance": "Just passing through. What'll you take for the rod?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Odell",
+    "stimulus": "Odell says: \"Just passing through. What'll you take for the rod?\"",
+    "utterance": "Ah, well, for a good rod like that, I'd say... eight coins? That's fair for a traveler, I think, keeps me stocked for the season and gets you set up for whatever waters you cross next.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Odell",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Ah, well, for a good rod like that, I'd say... eight coins? That's fair for a traveler, I think, keeps me stocked for the season and gets you set up for whatever waters you cross next.\"",
+    "utterance": "Eight's fair. Deal.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Odell",
+    "stimulus": "Odell says: \"Eight's fair. Deal.\"",
+    "utterance": null,
+    "action": {
+      "name": "sell_item",
+      "arguments": {
+        "item": "fishing rod",
+        "buyer_name": "Odell",
+        "total_price": 8
+      },
+      "result": "You sold 1 x fishing rod to Odell for 8 coins. You have 30 coins and: 1 x torn net."
+    },
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Odell",
+    "stimulus": "(You sold 1 x fishing rod to Odell for 8 coins. You have 30 coins and: 1 x torn net.) Now say your next line to Odell.",
+    "utterance": "Pleasure doin' business! And hey, since you're headin' out - if you happen across anyone needin' a good net, patched but sturdy, you send 'em my way, aye? Safe travels out there, watch the tides.",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Odell",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Pleasure doin' business! And hey, since you're headin' out - if you happen across anyone needin' a good net, patched but sturdy, you send 'em my way, aye? Safe travels out there, watch the tides.\"",
+    "utterance": "Will do. Thanks, Finn.",
+    "action": null,
+    "ends_conversation": true
+  }
+]

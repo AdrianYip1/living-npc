@@ -23,7 +23,15 @@ from .storage import (
     save_memory,
 )
 from .tools import Tool, ToolRegistry, make_wait_tool
-from .world import INTERACTION_RANGE, clamp_coordinate, distance, keep_personal_space, step_toward
+from .world import (
+    HESITATE_SPEED_FACTOR,
+    INTERACTION_RANGE,
+    NPC_MAX_SPEED,
+    clamp_coordinate,
+    distance,
+    keep_personal_space,
+    step_toward,
+)
 
 # initiate_conversation's result on success -- the first when the exchange
 # ran inline, the second when it was handed off to ConversationHooks.run and
@@ -276,19 +284,22 @@ class NPCRegistry:
     # ------------------------------------------------------------------ #
     # movement
     # ------------------------------------------------------------------ #
-    def step_movement(self, dt: float, holding: set[str] | frozenset[str] = frozenset()) -> None:
+    def step_movement(self, dt: float, hesitating: set[str] | frozenset[str] = frozenset()) -> None:
         """Advances every NPC's walk by `dt` real seconds. A busy NPC (mid-
         conversation) brakes to a stop where it is, but keeps its
-        destination and resumes walking once it's free again. So does
-        anyone named in `holding` -- e.g. a traveler pausing mid-stride
-        while it decides what to do about something it just noticed.
+        destination and resumes walking once it's free again. Anyone named
+        in `hesitating` -- e.g. a traveler deciding what to do about someone
+        it just noticed -- slows right down (HESITATE_SPEED_FACTOR) instead
+        of walking on past at full speed; stopping dead looked like a stall
+        whenever it then just carried on.
         """
         for agent in self.all():
-            busy = self.is_busy(agent.identity.name) or agent.identity.name in holding
+            busy = self.is_busy(agent.identity.name)
             if agent.destination is None and agent.velocity == (0.0, 0.0):
                 continue
+            max_speed = NPC_MAX_SPEED * (HESITATE_SPEED_FACTOR if agent.identity.name in hesitating else 1.0)
             position, velocity, arrived = step_toward(
-                agent.position, agent.velocity, None if busy else agent.destination, dt
+                agent.position, agent.velocity, None if busy else agent.destination, dt, max_speed
             )
             agent.position, agent.velocity = position, velocity
             if arrived:

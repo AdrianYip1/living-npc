@@ -1,0 +1,34 @@
+[
+  {
+    "speaker": "Finn",
+    "listener": "Selwyn",
+    "stimulus": "You've walked up to Selwyn. Say your opening line.",
+    "utterance": "Ah, Selwyn! Morning to you\u2014er, still morning anyway, cloudy as it is. Say, you wouldn't happen to be passing through with any spare netting on you, would you? Mine's gone and torn something awful, and I'm in a bit of a bind for it...",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Selwyn",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Ah, Selwyn! Morning to you\u2014er, still morning anyway, cloudy as it is. Say, you wouldn't happen to be passing through with any spare netting on you, would you? Mine's gone and torn something awful, and I'm in a bit of a bind for it...\"",
+    "utterance": "No netting on me, Finn. Cargo's rope and oilcloth, mostly.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Selwyn",
+    "stimulus": "Selwyn says: \"No netting on me, Finn. Cargo's rope and oilcloth, mostly.\"",
+    "utterance": "Ah, rope and oilcloth, eh? Well, no matter\u2014rope's always useful around the docks anyway. But no, it's netting I'm after, specifically... Ah well, can't be helped. Thanks all the same, Selwyn, and safe travels wherever you're headed next.",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Selwyn",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Ah, rope and oilcloth, eh? Well, no matter\u2014rope's always useful around the docks anyway. But no, it's netting I'm after, specifically... Ah well, can't be helped. Thanks all the same, Selwyn, and safe travels wherever you're headed next.\"",
+    "utterance": "Fair winds to you too, Finn. Mind that torn net.",
+    "action": null,
+    "ends_conversation": true
+  }
+]

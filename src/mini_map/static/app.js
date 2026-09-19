@@ -43,6 +43,9 @@ const MAP_HALF = MAP_SIZE / 2;
 const MAX_SPEED = 260; // world px/sec
 const ACCEL = 900; // px/sec^2 while a move key is held
 const DECEL = 1400; // px/sec^2 once keys are released
+// A traveler deciding what to do mid-walk slows to this fraction of
+// MAX_SPEED -- mirrors game_agents/world.py's HESITATE_SPEED_FACTOR.
+const HESITATE_SPEED_FACTOR = 0.25;
 const PERSISTENT_NPC_COLOR = "#2196f3";
 const TRAVELER_COLOR = "#ff9800";
 const TRAVELER_FADE_SECONDS = 1.2;
@@ -63,6 +66,7 @@ const BUBBLE_NAME_HEIGHT = 14;
 const BUBBLE_TAIL = 8;
 const BUBBLE_LINGER_SECONDS = 1.5; // on top of the server's read_seconds
 const BUBBLE_FADE_SECONDS = 0.35;
+const BUBBLE_STACK_GAP = 6; // px between bubbles lifted clear of each other
 const OVERHEARD_MAX_LINES = 40;
 
 const statusTime = document.getElementById("status-time");
@@ -172,6 +176,7 @@ function applyState(data) {
       : null;
     npc.busy = entry.busy;
     npc.talkingTo = entry.talking_to || null;
+    npc.deciding = Boolean(entry.deciding);
     npc.activity = entry.activity;
     npcs.push(npc);
   }
@@ -417,62 +422,115 @@ function wrapText(text, maxWidth, maxLines) {
   return lines;
 }
 
-// A rounded speech bubble whose tail points down at the speaker (sx, sy).
-// `side` (-1, 0, 1) shifts the body left/right of the tail -- away from a
-// conversation partner, so the two sides' bubbles don't pile up on each
-// other.
-function drawBubble(npc, bubble, sx, sy, side) {
+// Where a speech bubble goes and what's in it, before any stacking: body
+// just above the speaker's head, tail pointing down at them. `side` (-1, 0,
+// 1) shifts the body left/right of the tail -- away from a conversation
+// partner, so the two sides' bubbles don't pile up on each other.
+function layoutBubble(npc, bubble, sx, sy, side) {
+  ctx.save();
+  ctx.font = BUBBLE_FONT;
+  const lines = wrapText(bubble.text, BUBBLE_MAX_WIDTH - BUBBLE_PADDING * 2, BUBBLE_MAX_LINES);
+  const textWidth = Math.max(...lines.map((line) => ctx.measureText(line).width));
+  ctx.font = BUBBLE_NAME_FONT;
+  const nameWidth = ctx.measureText(npc.name).width;
+  ctx.restore();
+
+  const width = Math.ceil(Math.max(textWidth, nameWidth) + BUBBLE_PADDING * 2);
+  const height = BUBBLE_PADDING * 2 + BUBBLE_NAME_HEIGHT + lines.length * BUBBLE_LINE_HEIGHT;
+  const tipY = sy - NPC_RADIUS - 4;
+  const corner = 8;
+  const tailHalf = 6;
+  // Keep the tail at least a corner's width inside the body.
+  const shift = side * Math.max(0, width / 2 - corner - tailHalf - 4);
+  return {
+    npc,
+    bubble,
+    lines,
+    width,
+    height,
+    sx,
+    tipY,
+    left: sx - width / 2 + shift,
+    top: tipY - BUBBLE_TAIL - height,
+  };
+}
+
+function bubblesOverlap(a, b) {
+  const gap = BUBBLE_STACK_GAP;
+  return (
+    a.left < b.left + b.width + gap &&
+    b.left < a.left + a.width + gap &&
+    a.top < b.top + b.height + gap &&
+    b.top < a.top + a.height + gap
+  );
+}
+
+// Lifts bubbles clear of each other when speakers stand close together --
+// several people around one resident, say. The oldest bubble keeps its
+// spot; each newer one moves up above whatever it would cover, its tail
+// stretching down to its speaker.
+function stackBubbles(layouts) {
+  layouts.sort((a, b) => a.bubble.born - b.bubble.born);
+  const placed = [];
+  for (const layout of layouts) {
+    for (let tries = 0; tries < layouts.length; tries++) {
+      const hit = placed.find((other) => bubblesOverlap(layout, other));
+      if (!hit) {
+        break;
+      }
+      layout.top = hit.top - layout.height - BUBBLE_STACK_GAP;
+    }
+    placed.push(layout);
+  }
+  return layouts;
+}
+
+function paintBubble(layout) {
+  const { npc, bubble, lines, width, height, sx, tipY, left, top } = layout;
   const age = bubbleClock - bubble.born;
   const remaining = bubble.expires - bubbleClock;
   const alpha = Math.max(0, Math.min(1, age / BUBBLE_FADE_SECONDS, remaining / BUBBLE_FADE_SECONDS));
   if (alpha <= 0) {
     return;
   }
+  const right = left + width;
+  const bottom = top + height;
+  const corner = 8;
+  const tailHalf = 6;
+  // Where the tail leaves the body: under the speaker if it can be, but
+  // never past the rounded corners.
+  const tailX = Math.min(right - corner - tailHalf, Math.max(left + corner + tailHalf, sx));
 
   ctx.save();
   ctx.globalAlpha = alpha * npc.opacity;
-  ctx.font = BUBBLE_FONT;
-  const lines = wrapText(bubble.text, BUBBLE_MAX_WIDTH - BUBBLE_PADDING * 2, BUBBLE_MAX_LINES);
-  const textWidth = Math.max(...lines.map((line) => ctx.measureText(line).width));
-  ctx.font = BUBBLE_NAME_FONT;
-  const nameWidth = ctx.measureText(npc.name).width;
-  const width = Math.ceil(Math.max(textWidth, nameWidth) + BUBBLE_PADDING * 2);
-  const height = BUBBLE_PADDING * 2 + BUBBLE_NAME_HEIGHT + lines.length * BUBBLE_LINE_HEIGHT;
-
-  const tipY = sy - NPC_RADIUS - 4;
-  const bottom = tipY - BUBBLE_TAIL;
-  const top = bottom - height;
-  const tailHalf = 6;
-  const corner = 8;
-  // Keep the tail at least a corner's width inside the body.
-  const shift = side * Math.max(0, width / 2 - corner - tailHalf - 4);
-  const left = sx - width / 2 + shift;
-  const right = left + width;
-
   ctx.beginPath();
   ctx.moveTo(left + corner, top);
   ctx.arcTo(right, top, right, bottom, corner);
   ctx.arcTo(right, bottom, left, bottom, corner);
-  ctx.lineTo(sx + tailHalf, bottom);
+  ctx.lineTo(tailX + tailHalf, bottom);
   ctx.lineTo(sx, tipY);
-  ctx.lineTo(sx - tailHalf, bottom);
+  ctx.lineTo(tailX - tailHalf, bottom);
   ctx.arcTo(left, bottom, left, top, corner);
   ctx.arcTo(left, top, right, top, corner);
   ctx.closePath();
-  ctx.fillStyle = "rgba(245, 245, 240, 0.96)";
+  ctx.fillStyle = "rgba(12, 12, 12, 0.94)";
   ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
   ctx.shadowBlur = 8;
   ctx.shadowOffsetY = 2;
   ctx.fill();
   ctx.shadowColor = "transparent";
+  // A faint rim keeps the dark bubble readable over dark terrain.
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
 
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
   ctx.font = BUBBLE_NAME_FONT;
-  ctx.fillStyle = npc.isTraveler ? "#b86b00" : "#1565c0";
+  ctx.fillStyle = npc.isTraveler ? "#ffb74d" : "#64b5f6";
   ctx.fillText(npc.name, left + BUBBLE_PADDING, top + BUBBLE_PADDING);
   ctx.font = BUBBLE_FONT;
-  ctx.fillStyle = "#1b1b1b";
+  ctx.fillStyle = "#f2f2f2";
   lines.forEach((line, index) => {
     ctx.fillText(line, left + BUBBLE_PADDING, top + BUBBLE_PADDING + BUBBLE_NAME_HEIGHT + index * BUBBLE_LINE_HEIGHT);
   });
@@ -481,6 +539,7 @@ function drawBubble(npc, bubble, sx, sy, side) {
 
 function drawBubbles(width, height) {
   const byName = new Map(npcs.map((npc) => [npc.name, npc]));
+  const layouts = [];
   for (const [name, bubble] of bubbles) {
     const npc = byName.get(name);
     if (!npc || bubbleClock >= bubble.expires) {
@@ -492,7 +551,12 @@ function drawBubbles(width, height) {
     if (partner) {
       side = npc.x === partner.x ? (npc.name < partner.name ? -1 : 1) : Math.sign(npc.x - partner.x);
     }
-    drawBubble(npc, bubble, width / 2 + (npc.x - camera.x), height / 2 + (npc.y - camera.y), side);
+    layouts.push(layoutBubble(npc, bubble, width / 2 + (npc.x - camera.x), height / 2 + (npc.y - camera.y), side));
+  }
+  // Painted oldest first, so a newer (lifted) bubble's tail draws over an
+  // older bubble rather than disappearing behind it.
+  for (const layout of stackBubbles(layouts)) {
+    paintBubble(layout);
   }
 }
 
@@ -658,7 +722,7 @@ function tick(now) {
 // JS twin of game_agents/world.py's step_toward(), in canvas units: walk
 // toward `destination` (or brake to a stop if null) with the player's own
 // MAX_SPEED / ACCEL / DECEL, braking early enough to stop on the spot.
-function stepToward(body, destination, dt) {
+function stepToward(body, destination, dt, maxSpeed = MAX_SPEED) {
   const speed = Math.hypot(body.vx, body.vy);
 
   if (!destination) {
@@ -679,7 +743,7 @@ function stepToward(body, destination, dt) {
       return;
     }
 
-    const desiredSpeed = Math.min(MAX_SPEED, Math.sqrt(2 * DECEL * dist));
+    const desiredSpeed = Math.min(maxSpeed, Math.sqrt(2 * DECEL * dist));
     let dvx = (toX / dist) * desiredSpeed - body.vx;
     let dvy = (toY / dist) * desiredSpeed - body.vy;
     const dv = Math.hypot(dvx, dvy);
@@ -699,7 +763,12 @@ function stepToward(body, destination, dt) {
 function updateNpcs(dt) {
   const k = Math.min(1, NPC_CORRECTION_RATE * dt);
   for (const npc of npcs) {
-    stepToward(npc, npc.busy ? null : npc.destination, dt);
+    // Move exactly as the server does: braked mid-conversation, slowed
+    // right down while deciding what to do (see Simulation's `deciding`).
+    // Predicting a walk the server isn't doing means snapping back on
+    // every poll.
+    const maxSpeed = npc.deciding ? MAX_SPEED * HESITATE_SPEED_FACTOR : MAX_SPEED;
+    stepToward(npc, npc.busy ? null : npc.destination, dt, maxSpeed);
     npc.x += npc.errX * k;
     npc.y += npc.errY * k;
     npc.errX -= npc.errX * k;

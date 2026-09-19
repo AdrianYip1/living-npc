@@ -1,0 +1,26 @@
+[
+  {
+    "speaker": "Selwyn",
+    "listener": "Odell",
+    "stimulus": "You've walked up to Odell. Say your opening line.",
+    "utterance": "Rain's foul today. Any word on grain prices south o' here?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Odell",
+    "listener": "Selwyn",
+    "stimulus": "Selwyn says: \"Rain's foul today. Any word on grain prices south o' here?\"",
+    "utterance": "No word. I don't stay long enough to hear.",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Selwyn",
+    "listener": "Odell",
+    "stimulus": "Odell says: \"No word. I don't stay long enough to hear.\"",
+    "utterance": "Fair enough. Safe travels then, stranger.",
+    "action": null,
+    "ends_conversation": true
+  }
+]

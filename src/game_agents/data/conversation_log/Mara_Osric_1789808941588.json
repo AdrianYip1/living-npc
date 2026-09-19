@@ -1,0 +1,94 @@
+[
+  {
+    "speaker": "Mara",
+    "listener": "Osric",
+    "stimulus": "You've walked up to Osric. Say your opening line.",
+    "utterance": "Back again, Osric? Didn't I already tell you those hinges don't forge themselves?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Osric",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Back again, Osric? Didn't I already tell you those hinges don't forge themselves?\"",
+    "utterance": "Aye, still here\u2014one last look at my trinkets before I go?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Osric",
+    "stimulus": "Osric says: \"Aye, still here\u2014one last look at my trinkets before I go?\"",
+    "utterance": "Go on then, quick look. But I've got a hammer waiting and it don't like being kept.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Osric",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Go on then, quick look. But I've got a hammer waiting and it don't like being kept.\"",
+    "utterance": "Got a copper bangle, carved down south\u2014yours for three coppers?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Osric",
+    "stimulus": "Osric says: \"Got a copper bangle, carved down south\u2014yours for three coppers?\"",
+    "utterance": null,
+    "action": {
+      "name": "check_inventory",
+      "arguments": {},
+      "result": "You have 40 coins and: 1 x hammer, 4 x horseshoe, 6 x iron ingot."
+    },
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Osric",
+    "stimulus": "(You have 40 coins and: 1 x hammer, 4 x horseshoe, 6 x iron ingot.) Now say your next line to Osric.",
+    "utterance": "Bangle, eh? Not much use to me hammering hinges. But three coppers, sure, why not. Deal.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Osric",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Bangle, eh? Not much use to me hammering hinges. But three coppers, sure, why not. Deal.\"",
+    "utterance": null,
+    "action": {
+      "name": "buy_item",
+      "arguments": {
+        "item": "copper bangle",
+        "seller_name": "Mara",
+        "total_price": 3
+      },
+      "result": "The trade didn't go through: Mara only has 0 x copper bangle, not 1."
+    },
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Osric",
+    "listener": "Mara",
+    "stimulus": "(The trade didn't go through: Mara only has 0 x copper bangle, not 1.) Now say your next line to Mara.",
+    "utterance": "Ha! Must've sold that one already\u2014memory's as worn as my boots.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Osric",
+    "stimulus": "Osric says: \"Ha! Must've sold that one already\u2014memory's as worn as my boots.\"",
+    "utterance": "Worn boots and no bangle, eh? Sounds about right. Go on, off with you now\u2014I've got hinges waiting.",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Osric",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Worn boots and no bangle, eh? Sounds about right. Go on, off with you now\u2014I've got hinges waiting.\"",
+    "utterance": "Fair enough, Mara! Mind the hammer, take care now!",
+    "action": null,
+    "ends_conversation": true
+  }
+]

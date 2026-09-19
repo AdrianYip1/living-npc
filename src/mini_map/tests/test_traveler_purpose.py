@@ -62,7 +62,7 @@ def _run(sim: Simulation, seconds: float) -> None:
     real second, and every background turn/conversation settled per step.
     """
     for step in range(int(seconds * 30)):
-        sim._registry.step_movement(1 / 30, holding=set(sim._turns_in_flight))
+        sim._registry.step_movement(1 / 30, hesitating=set(sim._turns_in_flight))
         if step % 30 == 0:
             sim._environment.tick()
         sim._update_travelers()

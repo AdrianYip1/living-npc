@@ -87,8 +87,11 @@ class Simulation:
     when it's been standing idle a while. Any of
     those turns can move_to somewhere else, which is how a traveler
     interrupts its own walk. While a turn is being decided the traveler
-    stops in its tracks, rather than walking on past whatever it noticed.
-    It leaves town (is removed) on reaching its exit point.
+    slows to a hesitant walk (HESITATE_SPEED_FACTOR), rather than striding
+    on past whatever it noticed -- or freezing, which read as a stall. It
+    leaves town (is removed) on reaching its exit point, and heads there
+    for good if it waits TRAVELER_MAX_WAIT_MINUTES on someone busy or
+    stays TRAVELER_MAX_STAY_MINUTES in all.
 
     NPC-to-NPC conversations run on their own worker pool (see
     ConversationHooks, which this fills in on the registry): the
@@ -121,6 +124,9 @@ class Simulation:
     TRAVELER_MAX_STAY_MINUTES = 4 * 60
     # How close counts as having reached the exit point, in map units.
     TRAVELER_EXIT_REACHED = 1.0
+    # Game-minutes a traveler waits for someone busy in a conversation
+    # before giving up on them and leaving town.
+    TRAVELER_MAX_WAIT_MINUTES = 10
     # Coins a traveler carries when its identity comes from the fallback
     # (no LLM), and the least one that came to buy something ever carries.
     TRAVELER_FALLBACK_MONEY = (5, 30)
@@ -269,7 +275,7 @@ class Simulation:
             dt = min(now - last, self.MAX_MOVEMENT_DT_S)
             last = now
             if not self._paused.is_set():
-                self._registry.step_movement(dt, holding=set(self._turns_in_flight))
+                self._registry.step_movement(dt, hesitating=set(self._turns_in_flight))
                 self._update_travelers()
             self._stop.wait(1.0 / self.MOVEMENT_HZ)
 
@@ -390,10 +396,12 @@ class Simulation:
             if place is not None and not st.visited and distance(agent.position, place["position"]) <= INTERACTION_RANGE:
                 st.visited = True
 
-            if now - st.arrived_minute >= self.TRAVELER_MAX_STAY_MINUTES:
+            if not st.leaving and now - st.arrived_minute >= self.TRAVELER_MAX_STAY_MINUTES:
+                st.leaving = True
+                self._last_activity[name] = "has lingered long enough and heads out of town"
+            if st.leaving:
                 if agent.destination != st.exit_point:
                     agent.destination = st.exit_point
-                    self._last_activity[name] = "has lingered long enough and heads out of town"
                 continue
 
             newly_noticed = [
@@ -430,6 +438,25 @@ class Simulation:
                     f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                 )
                 continue
+
+            if st.waiting_for is not None:
+                if not self._registry.is_busy(st.waiting_for):
+                    # Whoever it wanted to talk to is free now: say so,
+                    # rather than leaving it to hover and try again at random.
+                    target, st.waiting_for = st.waiting_for, None
+                    if self._registry.get(target) is not None:
+                        self._start_traveler_turn(
+                            name,
+                            f"{target} has finished their conversation and is free to talk now. "
+                            f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                        )
+                        continue
+                elif now - st.waiting_since >= self.TRAVELER_MAX_WAIT_MINUTES:
+                    # Waited long enough: gives up and leaves town.
+                    self._last_activity[name] = f"got tired of waiting for {st.waiting_for} and heads out of town"
+                    st.waiting_for, st.leaving = None, True
+                    agent.destination = st.exit_point
+                    continue
 
             if st.talked_with is not None:
                 # Just out of a conversation: decide what's next now.
@@ -533,6 +560,7 @@ class Simulation:
             self._publish_speech(name, None, result.utterance)
             self._overhear(agent, result.utterance)
         self._publish_trade(name, result.action)
+        self._note_busy_refusal(name, result.action)
         if (
             result.action is not None
             and result.action["name"] == "initiate_conversation"
@@ -540,6 +568,9 @@ class Simulation:
         ):
             resolved = self._registry.resolve(result.action["arguments"].get("target_name", ""))
             if resolved is not None:
+                st = self._traveler_state.get(name)
+                if st is not None:
+                    st.waiting_for = None
                 # The exchange runs on its own thread and may already be
                 # over (and have written "talked with") by now.
                 if self._registry.partner_of(name) == resolved:
@@ -548,6 +579,20 @@ class Simulation:
                 return resolved
         self._last_activity[name] = self._describe(result)
         return None
+
+    def _note_busy_refusal(self, name: str, action: dict[str, Any] | None) -> None:
+        """A traveler that tried to talk to someone mid-conversation waits
+        for them (see _TravelerState.waiting_for).
+        """
+        st = self._traveler_state.get(name)
+        if st is None or action is None or action["name"] != "initiate_conversation":
+            return
+        result = action["result"]
+        if isinstance(result, str) and result.endswith(" is busy right now."):
+            target = self._registry.resolve(action["arguments"].get("target_name", ""))
+            if target != st.waiting_for:
+                # A fresh wait (not a retry of the same one) starts the clock.
+                st.waiting_for, st.waiting_since = target, self._environment.elapsed_minutes
 
     def _overhear(self, speaker: Agent, text: str) -> None:
         """A line said aloud outside any conversation still reaches whoever
@@ -770,6 +815,10 @@ class Simulation:
                     "destination": None if agent.destination is None else list(agent.destination),
                     "busy": self._registry.is_busy(agent.identity.name),
                     "talking_to": self._registry.partner_of(agent.identity.name),
+                    # A traveler stopped in its tracks while its turn is
+                    # decided (see _run_movement_loop) -- the page has to
+                    # know, or it keeps walking them on and snaps them back.
+                    "deciding": agent.identity.name in self._turns_in_flight,
                     "traveler": self._registry.is_traveler(agent.identity.name),
                     "activity": self._last_activity.get(agent.identity.name, ""),
                 }
@@ -795,6 +844,14 @@ class _TravelerState:
     # For a buyer: how many of the item it carried on arrival, so having
     # more means the purchase happened.
     item_baseline: int = 0
+    # Someone it tried to start a conversation with who was busy, and since
+    # when -- it gets a turn the moment they're free, or gives up and
+    # leaves after TRAVELER_MAX_WAIT_MINUTES (see _update_travelers).
+    waiting_for: str | None = None
+    waiting_since: int = 0
+    # Done here and heading out (gave up waiting, or stayed too long): no
+    # more turns, just the walk to the exit point.
+    leaving: bool = False
     # Set when a conversation it was in just ended (to the partner's name),
     # so it gets a turn to decide what's next right away.
     talked_with: str | None = None

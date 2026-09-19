@@ -8,6 +8,7 @@ from game_agents.bootstrap import INSTRUCTIONS_PATH
 from game_agents.identity import Identity
 from game_agents.llm import SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
 from game_agents.registry import NPCRegistry
+from game_agents.world import HESITATE_SPEED_FACTOR, NPC_MAX_SPEED
 from game_agents.storage import save_identities
 
 
@@ -111,7 +112,7 @@ class TravelerLifecycleTests(unittest.TestCase):
             self.assertFalse((Path(tmp) / "memory" / "Wren.json").exists())
             self.assertFalse((Path(tmp) / "inventory" / "Wren.json").exists())
 
-    def test_holding_brakes_a_walking_traveler(self):
+    def test_hesitating_slows_a_walking_traveler(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = _registry(tmp)
             agent = registry.add_traveler(_identity("Wren"), position=(-100, 0))
@@ -121,9 +122,11 @@ class TravelerLifecycleTests(unittest.TestCase):
             self.assertGreater(agent.velocity[0], 0)
 
             for _ in range(30):
-                registry.step_movement(1 / 30, holding={"Wren"})
-            self.assertEqual(agent.velocity, (0.0, 0.0))
-            self.assertEqual(agent.destination, (100, 0))  # kept, not forgotten
+                registry.step_movement(1 / 30, hesitating={"Wren"})
+            # Slowed right down, not stopped dead -- and still headed there.
+            self.assertGreater(agent.velocity[0], 0)
+            self.assertLessEqual(agent.velocity[0], NPC_MAX_SPEED * HESITATE_SPEED_FACTOR + 1e-6)
+            self.assertEqual(agent.destination, (100, 0))
 
     def test_resident_can_buy_from_a_traveler(self):
         with tempfile.TemporaryDirectory() as tmp:

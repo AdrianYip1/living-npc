@@ -332,7 +332,7 @@ class SoakRegressionTests(unittest.TestCase):
         self.assertEqual(len(transcript), 2)
 
     def test_walking_to_someone_stops_in_front_of_them(self):
-        self.assertEqual(keep_personal_space((12, -30), (40, -30), [(12, -30)]), (16, -30))
+        self.assertEqual(keep_personal_space((12, -30), (40, -30), [(12, -30)]), (19, -30))
 
     def test_a_clear_destination_is_left_alone(self):
         self.assertEqual(keep_personal_space((12, -30), (40, -30), [(30, 30)]), (12, -30))
@@ -344,6 +344,23 @@ class SoakRegressionTests(unittest.TestCase):
             self.assertGreaterEqual(distance(second, other), PERSONAL_SPACE - 0.5)
         self.assertLessEqual(distance(second, (12, -30)), INTERACTION_RANGE)
 
+    def test_a_crowd_forms_a_ring_in_talking_range(self):
+        # Several travelers all walking up to Mara: each gets its own spot,
+        # none on top of another, all close enough to talk to her.
+        mara = (12, -30)
+        taken = [mara]
+        for _ in range(5):
+            spot = keep_personal_space(mara, (60, -30), taken)
+            for other in taken:
+                self.assertGreaterEqual(distance(spot, other), PERSONAL_SPACE - 0.5)
+            self.assertLessEqual(distance(spot, mara), INTERACTION_RANGE)
+            taken.append(spot)
+
+    def test_icons_do_not_overlap_at_personal_space(self):
+        # NPC_RADIUS 16px and WORLD_SCALE 6 in app.js: an icon is ~5.3 units wide.
+        self.assertGreater(PERSONAL_SPACE, 2 * 16 / 6)
+        self.assertLess(PERSONAL_SPACE, INTERACTION_RANGE)
+
     def test_move_tool_keeps_personal_space(self):
         with tempfile.TemporaryDirectory() as tmp:
             npcs_path = Path(tmp) / "npcs.json"
@@ -352,8 +369,8 @@ class SoakRegressionTests(unittest.TestCase):
 
             result = registry.get("Wren").tools.execute("move_to", {"x": 12, "y": -30})
 
-            self.assertEqual(registry.get("Wren").destination, (16, -30))
-            self.assertIn("(16, -30)", result)
+            self.assertEqual(registry.get("Wren").destination, (19, -30))
+            self.assertIn("(19, -30)", result)
 
 
 if __name__ == "__main__":

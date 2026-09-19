@@ -4,6 +4,7 @@ point on the opposite edge, and moving only via their own move_to calls.
 from __future__ import annotations
 
 import json
+import math
 import re
 import tempfile
 import unittest
@@ -11,11 +12,12 @@ from pathlib import Path
 
 from environment_agent.agent import EnvironmentAgent
 
+from game_agents.agent import TurnResult
 from game_agents.identity import Identity
 from game_agents.llm import SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
 from game_agents.registry import NPCRegistry
 from game_agents.storage import save_identities
-from game_agents.world import MAP_MAX, MAP_MIN, PERSONAL_SPACE, distance
+from game_agents.world import HESITATE_SPEED_FACTOR, MAP_MAX, MAP_MIN, NPC_MAX_SPEED, PERSONAL_SPACE, distance
 
 from mini_map.simulation import Simulation
 
@@ -73,7 +75,7 @@ def _admit_one(sim: Simulation):
 
 def _walk(sim: Simulation, seconds: float) -> None:
     for _ in range(int(seconds * 30)):
-        sim._registry.step_movement(1 / 30, holding=set(sim._turns_in_flight))
+        sim._registry.step_movement(1 / 30, hesitating=set(sim._turns_in_flight))
         sim._update_travelers()
         sim.wait_for_pending()
 
@@ -148,7 +150,7 @@ class TravelerAgentTests(unittest.TestCase):
 
             self.assertEqual(sum(s.startswith("You notice") for s in llm.stimuli), 1)
 
-    def test_traveler_stands_still_while_its_turn_is_being_decided(self):
+    def test_traveler_slows_while_its_turn_is_being_decided(self):
         with tempfile.TemporaryDirectory() as tmp:
             sim = _sim(tmp, _TravelerLLM())
             traveler, _ = _admit_one(sim)
@@ -157,8 +159,86 @@ class TravelerAgentTests(unittest.TestCase):
 
             sim._turns_in_flight.add(traveler.identity.name)  # a turn is "in flight"
             for _ in range(60):
-                sim._registry.step_movement(1 / 30, holding=set(sim._turns_in_flight))
-            self.assertEqual(traveler.velocity, (0.0, 0.0))
+                sim._registry.step_movement(1 / 30, hesitating=set(sim._turns_in_flight))
+            # Hesitates -- slows right down -- rather than freezing mid-route.
+            speed = math.hypot(*traveler.velocity)
+            self.assertGreater(speed, 0)
+            self.assertLessEqual(speed, NPC_MAX_SPEED * HESITATE_SPEED_FACTOR + 1e-6)
+
+    def _refused_by_busy(self, sim, traveler, target):
+        sim._record_turn(
+            traveler,
+            TurnResult(
+                utterance=None,
+                action={
+                    "name": "initiate_conversation",
+                    "arguments": {"target_name": target},
+                    "result": f"{target} is busy right now.",
+                },
+            ),
+        )
+
+    def test_a_refused_traveler_is_told_when_its_target_is_free(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _TravelerLLM()
+            sim = _sim(tmp, llm, residents=[("Mara", (0, 0)), ("Finn", (0, 5))])
+            traveler, st = _admit_one(sim)
+            traveler.destination = None
+            sim._registry.try_occupy_pair("Mara", "Finn")
+            self._refused_by_busy(sim, traveler, "Mara")
+            self.assertEqual(st.waiting_for, "Mara")
+
+            sim._update_travelers()
+            sim.wait_for_pending()
+            self.assertFalse(any("free to talk now" in s for s in llm.stimuli))
+
+            sim._registry.release_pair("Mara", "Finn")
+            sim._update_travelers()
+            sim.wait_for_pending()
+            self.assertTrue(any(s.startswith("Mara has finished their conversation") for s in llm.stimuli))
+            self.assertIsNone(st.waiting_for)
+
+    def test_a_traveler_gives_up_and_leaves_after_waiting_ten_minutes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = _sim(tmp, _TravelerLLM(), residents=[("Mara", (0, 0)), ("Finn", (0, 5))], minutes_per_tick=1)
+            traveler, st = _admit_one(sim)
+            traveler.destination = None
+            sim._registry.try_occupy_pair("Mara", "Finn")
+            self._refused_by_busy(sim, traveler, "Mara")
+
+            for _ in range(Simulation.TRAVELER_MAX_WAIT_MINUTES - 1):
+                sim._environment.tick()
+            sim._update_travelers()
+            self.assertEqual(st.waiting_for, "Mara")  # 9 minutes: still waiting
+            self.assertFalse(st.leaving)
+
+            sim._environment.tick()
+            sim._update_travelers()
+            self.assertTrue(st.leaving)
+            self.assertEqual(traveler.destination, st.exit_point)
+            self.assertIn("tired of waiting for Mara", sim.state()["npcs"][-1]["activity"])
+
+            # Leaving is for good: noticing someone on the way doesn't pull it back.
+            sim._registry.release_pair("Mara", "Finn")
+            turns_before = len(sim._turns_in_flight)
+            sim._update_travelers()
+            self.assertEqual(traveler.destination, st.exit_point)
+            self.assertEqual(len(sim._turns_in_flight), turns_before)
+
+    def test_state_says_when_a_traveler_is_stopped_deciding(self):
+        # The page has to brake along with the server, or it predicts the
+        # walk on and snaps the icon back on every poll (a visible jiggle).
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = _sim(tmp, _TravelerLLM())
+            traveler, _ = _admit_one(sim)
+            name = traveler.identity.name
+
+            def deciding():
+                return next(n for n in sim.state()["npcs"] if n["name"] == name)["deciding"]
+
+            self.assertFalse(deciding())
+            sim._turns_in_flight.add(name)
+            self.assertTrue(deciding())
 
     def test_a_traveler_that_never_moves_is_sent_out_after_the_max_stay(self):
         with tempfile.TemporaryDirectory() as tmp:

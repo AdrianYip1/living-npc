@@ -1,0 +1,26 @@
+[
+  {
+    "speaker": "Finn",
+    "listener": "Corwin",
+    "stimulus": "You've walked up to Corwin. Say your opening line.",
+    "utterance": "Well, well, back again already, Corwin? Heh, you're gettin' to be a regular fixture on this pier -- cloudy as it is, good day for it though. Say, I know I've asked before and you'll think me daft for askin' a third time, but that net situation hasn't changed on you, has it? No harm in tryin' me luck again!",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Corwin",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Well, well, back again already, Corwin? Heh, you're gettin' to be a regular fixture on this pier -- cloudy as it is, good day for it though. Say, I know I've asked before and you'll think me daft for askin' a third time, but that net situation hasn't changed on you, has it? No harm in tryin' me luck again!\"",
+    "utterance": "Still no net, Finn. Had my rest though. Time I moved on.",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Corwin",
+    "stimulus": "Corwin says: \"Still no net, Finn. Had my rest though. Time I moved on.\"",
+    "utterance": "Ah, well, safe travels then, Corwin! Mind how you go, and if you cross paths with anyone haulin' spare nets, you send 'em my way, eh? Good knowin' ya!",
+    "action": null,
+    "ends_conversation": true
+  }
+]

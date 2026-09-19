@@ -1,0 +1,83 @@
+[
+  {
+    "speaker": "Corwin",
+    "listener": "Mara",
+    "stimulus": "You've walked up to Mara. Say your opening line.",
+    "utterance": "Good morrow, Mistress Mara. I've need of horseshoes, if you'd oblige.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Corwin",
+    "stimulus": "Corwin says: \"Good morrow, Mistress Mara. I've need of horseshoes, if you'd oblige.\"",
+    "utterance": "Morning, Corwin. Horseshoes, aye, got plenty. How many head you shoeing?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Corwin",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Morning, Corwin. Horseshoes, aye, got plenty. How many head you shoeing?\"",
+    "utterance": "Just the one horse, mistress. A single set of four, please.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Corwin",
+    "stimulus": "Corwin says: \"Just the one horse, mistress. A single set of four, please.\"",
+    "utterance": "Set of four, easy enough. Call it eight coin, and I'll throw in the nails.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Corwin",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Set of four, easy enough. Call it eight coin, and I'll throw in the nails.\"",
+    "utterance": "Eight coin, agreed. A fair price, mistress.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Corwin",
+    "stimulus": "Corwin says: \"Eight coin, agreed. A fair price, mistress.\"",
+    "utterance": null,
+    "action": {
+      "name": "sell_item",
+      "arguments": {
+        "item": "horseshoes",
+        "buyer_name": "Corwin",
+        "total_price": 8,
+        "quantity": 4
+      },
+      "result": "The trade didn't go through: Mara only has 0 x horseshoes, not 4."
+    },
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Corwin",
+    "stimulus": "(The trade didn't go through: Mara only has 0 x horseshoes, not 4.) Now say your next line to Corwin.",
+    "utterance": "Huh. Rack's bare - must've sold my last set and not marked it. Give me a day, I'll have a fresh set hammered out for you.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Corwin",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Huh. Rack's bare - must've sold my last set and not marked it. Give me a day, I'll have a fresh set hammered out for you.\"",
+    "utterance": "A day's delay is ill news, but I've little choice. I'll return.",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Corwin",
+    "stimulus": "Corwin says: \"A day's delay is ill news, but I've little choice. I'll return.\"",
+    "utterance": "Fair enough. Come back tomorrow, and they'll be waiting for you.",
+    "action": null,
+    "ends_conversation": true
+  }
+]
