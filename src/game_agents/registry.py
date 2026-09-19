@@ -9,12 +9,16 @@ from .conversation import run_conversation, save_transcript
 from .identity import DEFAULT_PROFILE_TEMPLATE
 from .inventory import TradeError, trade
 from .llm import LLMClient
+from .identity import Identity
+from .memory import MemoryStore
 from .storage import (
     load_identities,
     load_instructions,
     load_inventory,
     load_memory,
+    load_places,
     load_profile_template,
+    render_places,
     save_inventory,
     save_memory,
 )
@@ -45,7 +49,19 @@ class NPCRegistry:
     conversation), since that needs a shared source of truth reachable from
     every NPC's own initiate_conversation tool -- an Agent has no visibility
     into any other Agent on its own.
+
+    Travelers (add_traveler / remove_traveler) are live Agents here too, so
+    residents can talk to and trade with them by name exactly like with
+    each other -- but they come and go at runtime, get a deliberately
+    small action set (move, start a conversation, buy, wait) and a hard
+    cap on how much they say, and are never saved to disk. Because agents
+    can now appear and disappear while other threads are mid-iteration,
+    every walk over the roster goes through a snapshot (all()).
     """
+
+    # Hard cap on a traveler's spoken lines, in words -- enforced by Agent
+    # (see max_utterance_words), and quoted to the traveler in its prompt.
+    TRAVELER_MAX_WORDS = 12
 
     def __init__(
         self,
@@ -57,10 +73,12 @@ class NPCRegistry:
         conversation_turns: int = 4,
         conversation_log_dir: str | Path | None = None,
         inventory_dir: str | Path | None = None,
+        world_path: str | Path | None = None,
     ) -> None:
         # Exposed so anything generating content in the same world (e.g.
         # traveler identities) uses the same backend as the NPCs.
         self.llm = llm
+        self._conversation_turns = conversation_turns
         self._memory_dir = Path(memory_dir)
         # None means inventories aren't persisted -- every run starts from
         # each identity's starting_money / starting_items.
@@ -71,11 +89,25 @@ class NPCRegistry:
         self._trade_lock = threading.Lock()
         self._conversation_log_dir = Path(conversation_log_dir) if conversation_log_dir else None
         self._busy: set[str] = set()
+        # Guards _busy and roster changes together, so "is this traveler
+        # free to leave?" and "claim them for a conversation" can't race.
+        self._busy_lock = threading.RLock()
         instructions = load_instructions(instructions_path) if instructions_path else ""
         profile_template = (load_profile_template(instructions_path) if instructions_path else "") or DEFAULT_PROFILE_TEMPLATE
+        traveler_lines = load_instructions(instructions_path, key="traveler_instructions") if instructions_path else ""
+        traveler_lines = traveler_lines.replace("{max_words}", str(self.TRAVELER_MAX_WORDS))
+        self._traveler_instructions = "\n".join(part for part in (instructions, traveler_lines) if part)
+        self._traveler_profile_template = (
+            load_profile_template(instructions_path, key="traveler_profile_template") if instructions_path else ""
+        ) or profile_template
+        # Shared by everyone, residents and travelers alike (see world.json).
+        # Public so the simulation can pick a place for a traveler to visit.
+        self.places = load_places(world_path) if world_path else []
+        self._world_context = render_places(self.places)
         common_tools = tools.all_tools() if tools is not None else []
 
         self._agents: dict[str, Agent] = {}
+        self._travelers: set[str] = set()
         for identity in load_identities(npcs_path):
             memory = load_memory(identity.name, self._memory_dir)
             inventory = load_inventory(identity.name, self._inventory_dir) if self._inventory_dir else None
@@ -97,16 +129,83 @@ class NPCRegistry:
                 profile_template=profile_template,
                 position=identity.home,
                 inventory=inventory,
+                standing_context=self._world_context,
             )
 
     def get(self, name: str) -> Agent | None:
         return self._agents.get(name)
 
     def all(self) -> list[Agent]:
-        return list(self._agents.values())
+        """Residents and travelers, as a snapshot -- safe to iterate while
+        travelers arrive or leave on other threads.
+        """
+        with self._busy_lock:
+            return list(self._agents.values())
+
+    def residents(self) -> list[Agent]:
+        return [agent for agent in self.all() if agent.identity.name not in self._travelers]
+
+    def travelers(self) -> list[Agent]:
+        return [agent for agent in self.all() if agent.identity.name in self._travelers]
+
+    def is_traveler(self, name: str) -> bool:
+        return name in self._travelers
+
+    # ------------------------------------------------------------------ #
+    # travelers
+    # ------------------------------------------------------------------ #
+    def add_traveler(self, identity: Identity, *, position: tuple[float, float], standing_context: str = "") -> Agent:
+        """Brings a traveler into the world as a live Agent at `position`.
+        The name must not already be taken (resident or traveler) -- pick
+        one with unique_name() first.
+        """
+        name = identity.name
+        tools = ToolRegistry()
+        tools.register(self._make_move_tool(name))
+        tools.register(self._make_initiate_conversation_tool(name, self._conversation_turns))
+        tools.register(self._make_trade_tool(name, buying=True))
+        tools.register(make_wait_tool())
+        agent = Agent(
+            identity,
+            self.llm,
+            tools,
+            memory=MemoryStore(),
+            instructions=self._traveler_instructions,
+            profile_template=self._traveler_profile_template,
+            position=position,
+            standing_context="\n\n".join(part for part in (standing_context, self._world_context) if part),
+            max_utterance_words=self.TRAVELER_MAX_WORDS,
+        )
+        with self._busy_lock:
+            if self._resolve(name) is not None:
+                raise ValueError(f"an NPC named {name!r} is already here")
+            self._agents[name] = agent
+            self._travelers.add(name)
+        return agent
+
+    def remove_traveler(self, name: str) -> bool:
+        """Takes a traveler out of the world. Refuses (False) while they're
+        busy, so nobody leaves mid-conversation; also takes the trade lock,
+        so nobody leaves mid-trade either.
+        """
+        with self._trade_lock, self._busy_lock:
+            if name not in self._travelers or name in self._busy:
+                return False
+            self._travelers.discard(name)
+            del self._agents[name]
+            return True
+
+    def unique_name(self, name: str) -> str:
+        """`name`, or `name` with a number appended if someone here already
+        has it (case-insensitively, the same way _resolve() matches).
+        """
+        candidate, n = name, 2
+        while self._resolve(candidate) is not None:
+            candidate, n = f"{name} {n}", n + 1
+        return candidate
 
     def save_all(self) -> None:
-        for agent in self._agents.values():
+        for agent in self.residents():
             save_memory(agent.identity.name, agent.memory, self._memory_dir)
             if self._inventory_dir is not None:
                 save_inventory(agent.identity.name, agent.inventory, self._inventory_dir)
@@ -125,15 +224,19 @@ class NPCRegistry:
         initiate_conversation call just fails harmlessly instead of
         recursing.
         """
-        if self.is_busy(a_name) or self.is_busy(b_name):
-            return False
-        self._busy.add(a_name)
-        self._busy.add(b_name)
-        return True
+        with self._busy_lock:
+            if a_name not in self._agents or b_name not in self._agents:
+                return False  # one of them has already left town
+            if self.is_busy(a_name) or self.is_busy(b_name):
+                return False
+            self._busy.add(a_name)
+            self._busy.add(b_name)
+            return True
 
     def release_pair(self, a_name: str, b_name: str) -> None:
-        self._busy.discard(a_name)
-        self._busy.discard(b_name)
+        with self._busy_lock:
+            self._busy.discard(a_name)
+            self._busy.discard(b_name)
 
     def try_occupy(self, name: str) -> bool:
         """Single-participant version of try_occupy_pair -- for a
@@ -150,13 +253,15 @@ class NPCRegistry:
     # ------------------------------------------------------------------ #
     # movement
     # ------------------------------------------------------------------ #
-    def step_movement(self, dt: float) -> None:
+    def step_movement(self, dt: float, holding: set[str] | frozenset[str] = frozenset()) -> None:
         """Advances every NPC's walk by `dt` real seconds. A busy NPC (mid-
         conversation) brakes to a stop where it is, but keeps its
-        destination and resumes walking once it's free again.
+        destination and resumes walking once it's free again. So does
+        anyone named in `holding` -- e.g. a traveler pausing mid-stride
+        while it decides what to do about something it just noticed.
         """
-        for agent in self._agents.values():
-            busy = self.is_busy(agent.identity.name)
+        for agent in self.all():
+            busy = self.is_busy(agent.identity.name) or agent.identity.name in holding
             if agent.destination is None and agent.velocity == (0.0, 0.0):
                 continue
             position, velocity, arrived = step_toward(
@@ -205,8 +310,11 @@ class NPCRegistry:
 
     def _make_move_tool(self, name: str) -> Tool:
         def handler(x: int, y: int) -> str:
+            agent = self._agents.get(name)
+            if agent is None:
+                return "You've already left town."
             clamped = (clamp_coordinate(int(x)), clamp_coordinate(int(y)))
-            self._agents[name].destination = clamped
+            agent.destination = clamped
             return f"You start walking to ({clamped[0]}, {clamped[1]})."
 
         return Tool(
@@ -258,6 +366,10 @@ class NPCRegistry:
             quantity, total_price = int(quantity), int(total_price)
 
             with self._trade_lock:
+                # A traveler can only leave under this same lock (see
+                # remove_traveler), so once both are here, they stay here.
+                if buyer_name not in self._agents or seller_name not in self._agents:
+                    return f"The trade didn't go through: {other_name} isn't here anymore."
                 # Checked inside the lock alongside the inventories, so the
                 # whole trade is judged against one consistent snapshot.
                 too_far = self._range_error(name, other, "trade")
@@ -332,7 +444,7 @@ class NPCRegistry:
         if agent is not None:
             return agent
         lowered = target.strip().lower()
-        for candidate in self._agents.values():
+        for candidate in self.all():
             if candidate.identity.name.lower() == lowered:
                 return candidate
         return None

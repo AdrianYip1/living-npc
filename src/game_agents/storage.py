@@ -44,7 +44,7 @@ def save_identities(identities: list[Identity], path: str | Path) -> None:
     p.write_text(json.dumps(records, indent=2), encoding="utf-8")
 
 
-def load_instructions(path: str | Path) -> str:
+def load_instructions(path: str | Path, key: str = "instructions") -> str:
     """The behavioral intro prepended to every agent's system prompt --
     kept as its own small JSON file (a list of instruction lines) rather
     than a string in code, so it's easy to tweak wording without touching
@@ -53,11 +53,11 @@ def load_instructions(path: str | Path) -> str:
     p = Path(path)
     if not p.exists():
         return ""
-    lines = json.loads(p.read_text(encoding="utf-8")).get("instructions", [])
+    lines = json.loads(p.read_text(encoding="utf-8")).get(key, [])
     return "\n".join(f"- {line}" for line in lines)
 
 
-def load_profile_template(path: str | Path) -> str:
+def load_profile_template(path: str | Path, key: str = "profile_template") -> str:
     """The template an NPC's Identity gets rendered into (`{name}`, `{traits}`,
     etc.) -- lives in the same file as load_instructions() reads, so the
     whole static shape of what's sent to the LLM is visible in one place.
@@ -66,7 +66,30 @@ def load_profile_template(path: str | Path) -> str:
     p = Path(path)
     if not p.exists():
         return ""
-    return json.loads(p.read_text(encoding="utf-8")).get("profile_template", "")
+    return json.loads(p.read_text(encoding="utf-8")).get(key, "")
+
+
+def load_places(path: str | Path) -> list[dict]:
+    """world.json's named places -- each {"name", "position": [x, y],
+    "description"}. Empty list if missing.
+    """
+    p = Path(path)
+    if not p.exists():
+        return []
+    return json.loads(p.read_text(encoding="utf-8")).get("places", [])
+
+
+def render_places(places: list[dict]) -> str:
+    """The prompt block every NPC (resident or traveler) sees, so anyone can
+    move_to a place by its coordinates without having to already know them.
+    """
+    if not places:
+        return ""
+    lines = [
+        f"- {place['name']} at ({place['position'][0]}, {place['position'][1]}): {place['description']}"
+        for place in places
+    ]
+    return "Places in town you can walk to:\n" + "\n".join(lines)
 
 
 def load_memory(name: str, directory: str | Path) -> MemoryStore:

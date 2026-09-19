@@ -54,6 +54,8 @@ class Agent:
         profile_template: str = DEFAULT_PROFILE_TEMPLATE,
         position: tuple[float, float] | None = None,
         inventory: Inventory | None = None,
+        standing_context: str = "",
+        max_utterance_words: int | None = None,
     ) -> None:
         self.identity = identity
         self.memory = memory if memory is not None else MemoryStore()
@@ -61,6 +63,12 @@ class Agent:
         self.tools = tools or ToolRegistry()
         self.instructions = instructions
         self.profile_template = profile_template
+        # Extra, always-on lines for this one agent's system prompt, right
+        # after its identity -- e.g. a traveler's exit point.
+        self.standing_context = standing_context
+        # None = unlimited. Otherwise the speak tool tells the model the cap
+        # and any longer line is cut down to it (see respond()).
+        self.max_utterance_words = max_utterance_words
         # Dynamic, unlike home/workplace on Identity -- spawns at home. The
         # move tool (see registry.py) only sets `destination`; the NPC then
         # actually walks there over time, one NPCRegistry.step_movement()
@@ -92,12 +100,12 @@ class Agent:
         result = self.llm.complete(
             system=self._build_system_prompt(scene, relevant),
             messages=[{"role": "user", "content": stimulus}],
-            tools=[SPEAK_TOOL_SCHEMA, *self.tools.schemas()],
+            tools=[self._speak_schema(), *self.tools.schemas()],
         )
         call = result.tool_call
 
         if call.name == SPEAK_TOOL_NAME:
-            utterance = call.arguments.get("text", "")
+            utterance = self._cap_utterance(call.arguments.get("text", ""))
             action = None
             memory_content = f"{stimulus} -> {utterance}"
         else:
@@ -113,11 +121,30 @@ class Agent:
 
         return TurnResult(utterance=utterance, action=action)
 
+    def _speak_schema(self) -> dict[str, Any]:
+        if self.max_utterance_words is None:
+            return SPEAK_TOOL_SCHEMA
+        limit = self.max_utterance_words
+        return {
+            **SPEAK_TOOL_SCHEMA,
+            "description": f"{SPEAK_TOOL_SCHEMA['description']} You're a person of few words: at most {limit} words.",
+        }
+
+    def _cap_utterance(self, text: str) -> str:
+        if self.max_utterance_words is None:
+            return text
+        words = text.split()
+        if len(words) <= self.max_utterance_words:
+            return text
+        return " ".join(words[: self.max_utterance_words]) + "..."
+
     def _build_system_prompt(self, scene: Scene, memories: list[Memory]) -> str:
         parts = []
         if self.instructions:
             parts.append(self.instructions)
         parts.append(self.identity.prompt_block(self.profile_template))
+        if self.standing_context:
+            parts.append(self.standing_context)
         parts.append(f"You are currently at ({self.position[0]:.0f}, {self.position[1]:.0f}).")
         if self.destination is not None:
             parts.append(f"You are walking toward ({self.destination[0]}, {self.destination[1]}).")

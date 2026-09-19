@@ -17,13 +17,12 @@
 // `paused` flag on every /api/state poll.
 //
 // Travelers are decided by the environment agent (how many per in-game
-// day, and when -- see environment_agent/agent.py) and show up in
-// /api/state's traveler_arrivals, each with an id and an LLM-generated
-// identity in the same shape as an npcs.json entry. The page spawns each
-// new id once: it drifts in from a random map edge, fades in, walks a
-// straight placeholder line across the map, and is removed the moment it
-// crosses back outside the map bounds. That walk is still client-only --
-// the server doesn't track where a traveler is.
+// day, and when -- see environment_agent/agent.py) and then run by the
+// server as live LLM agents, like the persistent NPCs: they arrive in
+// /api/state's npcs list flagged `traveler`, walk wherever their own
+// move_to calls send them, and vanish from the list once they reach their
+// exit point. The page only draws them (dashed ring, fade-in) and logs
+// each arrival from traveler_arrivals.
 
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
@@ -36,7 +35,8 @@ const MAP_HALF = MAP_SIZE / 2;
 const MAX_SPEED = 260; // world px/sec
 const ACCEL = 900; // px/sec^2 while a move key is held
 const DECEL = 1400; // px/sec^2 once keys are released
-const NPC_COLORS = ["#e91e63", "#2196f3", "#ff9800", "#9c27b0", "#00bcd4"];
+const PERSISTENT_NPC_COLOR = "#2196f3";
+const TRAVELER_COLOR = "#ff9800";
 const TRAVELER_FADE_SECONDS = 1.2;
 const GAME_BOUND = 100; // matches game_agents/world.py's MAP_MIN/MAX
 const WORLD_SCALE = MAP_HALF / GAME_BOUND; // backend coord -> canvas world unit
@@ -81,19 +81,9 @@ const velocity = { x: 0, y: 0 };
 let facingAngle = -Math.PI / 2; // start facing up
 const FACING_MIN_SPEED = 4; // world units/sec
 
-// Real NPCs, kept live by polling /api/state. Colors are assigned once per
-// name (on first sighting) and then held stable across polls, since the
-// backend doesn't send one -- npcColors persists that assignment even
-// though the npc objects themselves get replaced each poll.
+// Real NPCs, kept live by polling /api/state. All share PERSISTENT_NPC_COLOR
+// so they read apart from travelers at a glance.
 const npcs = [];
-const npcColors = new Map();
-
-function colorFor(name) {
-  if (!npcColors.has(name)) {
-    npcColors.set(name, NPC_COLORS[npcColors.size % NPC_COLORS.length]);
-  }
-  return npcColors.get(name);
-}
 
 function applyState(data) {
   if (typeof data.clock === "string") {
@@ -128,7 +118,15 @@ function applyState(data) {
   npcs.length = 0;
   for (const entry of data.npcs || []) {
     const existing = byName.get(entry.name);
-    const npc = existing || { name: entry.name, color: colorFor(entry.name), errX: 0, errY: 0 };
+    const npc = existing || {
+      name: entry.name,
+      isTraveler: Boolean(entry.traveler),
+      color: entry.traveler ? TRAVELER_COLOR : PERSISTENT_NPC_COLOR,
+      // Travelers fade in on first sighting; residents are just there.
+      opacity: entry.traveler ? 0 : 1,
+      errX: 0,
+      errY: 0,
+    };
     const serverX = entry.x * WORLD_SCALE;
     const serverY = entry.y * WORLD_SCALE;
     // The server owns where NPCs actually are (see NPCRegistry.
@@ -158,16 +156,22 @@ function applyState(data) {
   if (nearbyNPC && !npcs.includes(nearbyNPC)) {
     nearbyNPC = null;
   }
+  // The server won't let anyone leave mid-conversation, but if the partner
+  // is gone anyway (e.g. a server restart), don't leave the panel talking
+  // to no one.
+  if (conversationPartner && !npcs.includes(conversationPartner)) {
+    closeConversation();
+  }
 
-  spawnNewTravelers(data.traveler_arrivals || []);
+  logTravelerArrivals(data.traveler_arrivals || []);
 }
 
-// Highest traveler_arrivals id already handled. null until the first poll,
+// Highest traveler_arrivals id already logged. null until the first poll,
 // which only records where the list stands -- otherwise a page reload
-// would re-spawn every recent arrival at once.
+// would re-log every recent arrival at once.
 let lastTravelerId = null;
 
-function spawnNewTravelers(arrivals) {
+function logTravelerArrivals(arrivals) {
   const maxId = arrivals.reduce((max, arrival) => Math.max(max, arrival.id), 0);
   if (lastTravelerId === null) {
     lastTravelerId = maxId;
@@ -175,7 +179,6 @@ function spawnNewTravelers(arrivals) {
   }
   for (const arrival of arrivals) {
     if (arrival.id > lastTravelerId) {
-      spawnTraveler(arrival);
       appendLogLine(`A traveler arrives at ${arrival.arrived_at}: ${arrival.identity.name}. ${arrival.identity.backstory}`, { system: true });
     }
   }
@@ -198,59 +201,6 @@ async function pollState() {
       statePollFailed = true;
     }
   }
-}
-
-// Traveler NPCs come and go over time, unlike the persistent npcs above.
-// Mutated in place by spawnTraveler() (push) and tick() (splice on exit).
-const travelers = [];
-
-function spawnTraveler(arrival) {
-  const edge = Math.floor(Math.random() * 4);
-  const along = (Math.random() * 2 - 1) * (MAP_HALF - 20);
-  const inset = MAP_HALF - 4;
-  let x;
-  let y;
-  let inwardAngle;
-  if (edge === 0) {
-    x = along;
-    y = -inset;
-    inwardAngle = Math.PI / 2; // spawned on top edge, walks down
-  } else if (edge === 1) {
-    x = inset;
-    y = along;
-    inwardAngle = Math.PI; // spawned on right edge, walks left
-  } else if (edge === 2) {
-    x = along;
-    y = inset;
-    inwardAngle = -Math.PI / 2; // spawned on bottom edge, walks up
-  } else {
-    x = -inset;
-    y = along;
-    inwardAngle = 0; // spawned on left edge, walks right
-  }
-
-  // Aim roughly across the map, not straight along the edge, with some
-  // spread so travelers don't all cut the exact same line.
-  const angle = inwardAngle + (Math.random() * (Math.PI / 3) - Math.PI / 6);
-  // Walked toward with stepToward() -- the same MAX_SPEED / ACCEL / DECEL
-  // as the player and NPCs. The target sits a full map-width past the far
-  // edge, so the traveler leaves the map (and gets removed) while still at
-  // cruising speed, never braking for it.
-  const exitDistance = MAP_SIZE * 2;
-
-  travelers.push({
-    id: arrival.id,
-    name: arrival.identity.name,
-    identity: arrival.identity,
-    color: NPC_COLORS[Math.floor(Math.random() * NPC_COLORS.length)],
-    isTraveler: true, // no backend counterpart -- conversation panel stays local-only for these
-    x,
-    y,
-    vx: 0,
-    vy: 0,
-    destination: { x: x + Math.cos(angle) * exitDistance, y: y + Math.sin(angle) * exitDistance },
-    opacity: 0,
-  });
 }
 
 const pressedKeys = new Set();
@@ -366,13 +316,7 @@ function drawWorld() {
   for (const npc of npcs) {
     const sx = width / 2 + (npc.x - camera.x);
     const sy = height / 2 + (npc.y - camera.y);
-    drawNpcIcon(npc, sx, sy, { nearby: npc === nearbyNPC });
-  }
-
-  for (const traveler of travelers) {
-    const sx = width / 2 + (traveler.x - camera.x);
-    const sy = height / 2 + (traveler.y - camera.y);
-    drawNpcIcon(traveler, sx, sy, { nearby: traveler === nearbyNPC, opacity: traveler.opacity, dashed: true });
+    drawNpcIcon(npc, sx, sy, { nearby: npc === nearbyNPC, opacity: npc.opacity, dashed: npc.isTraveler });
   }
 
   ctx.restore();
@@ -459,7 +403,6 @@ function tick(now) {
     }
 
     updateNpcs(dt);
-    updateTravelers(dt);
   }
 
   updateNearbyNPC();
@@ -516,31 +459,14 @@ function updateNpcs(dt) {
     npc.y += npc.errY * k;
     npc.errX -= npc.errX * k;
     npc.errY -= npc.errY * k;
-  }
-}
-
-function updateTravelers(dt) {
-  for (let i = travelers.length - 1; i >= 0; i--) {
-    const traveler = travelers[i];
-    stepToward(traveler, traveler.destination, dt);
-    traveler.opacity = Math.min(1, traveler.opacity + dt / TRAVELER_FADE_SECONDS);
-
-    if (Math.abs(traveler.x) > MAP_HALF || Math.abs(traveler.y) > MAP_HALF) {
-      travelers.splice(i, 1);
-      if (nearbyNPC === traveler) {
-        nearbyNPC = null;
-      }
-      if (conversationPartner === traveler) {
-        closeConversation();
-      }
-    }
+    npc.opacity = Math.min(1, npc.opacity + dt / TRAVELER_FADE_SECONDS);
   }
 }
 
 function updateNearbyNPC() {
   let closest = null;
   let closestDist = INTERACT_RANGE;
-  for (const entity of npcs.concat(travelers)) {
+  for (const entity of npcs) {
     const dist = Math.hypot(entity.x - camera.x, entity.y - camera.y);
     if (dist < closestDist) {
       closest = entity;
@@ -588,9 +514,8 @@ async function postJSON(path, body) {
   });
 }
 
-// Real NPCs (not travelers -- they have no backend counterpart to claim
-// busy state on) go through the server to actually start the exchange:
-// this is the same busy claim the world tick and NPC-to-NPC conversations
+// Every NPC, resident or traveler, goes through the server to actually
+// start the exchange: this is the same busy claim the world tick and NPC-to-NPC conversations
 // use, so a real conversation locks this NPC out of autonomous behavior
 // for as long as the panel stays open, exactly like being mid-exchange
 // with another NPC would.
@@ -603,18 +528,16 @@ async function openConversation(npc) {
   conversationLog.innerHTML = "";
   conversationInput.focus();
 
-  if (!npc.isTraveler) {
-    let ok = false;
-    try {
-      const response = await postJSON("/api/conversation/start", { name: npc.name });
-      ok = response.ok;
-    } catch (err) {
-      ok = false;
-    }
-    if (!ok) {
-      appendLogLine(`${npc.name} is busy right now.`, { system: true });
-      closeConversation();
-    }
+  let ok = false;
+  try {
+    const response = await postJSON("/api/conversation/start", { name: npc.name });
+    ok = response.ok;
+  } catch (err) {
+    ok = false;
+  }
+  if (!ok) {
+    appendLogLine(`${npc.name} is busy right now.`, { system: true });
+    closeConversation();
   }
 }
 
@@ -624,7 +547,7 @@ function closeConversation() {
   conversationPartner = null;
   conversationEl.classList.add("hidden");
   conversationInput.blur();
-  if (npc && !npc.isTraveler) {
+  if (npc) {
     postJSON("/api/conversation/end", { name: npc.name }).catch(() => {});
   }
 }
@@ -715,9 +638,6 @@ conversationForm.addEventListener("submit", async (event) => {
   conversationInput.value = "";
   resizeConversationInput();
 
-  if (npc.isTraveler) {
-    return; // no backend counterpart -- stays a local echo, as before
-  }
 
   setConversationBusy(true);
   try {

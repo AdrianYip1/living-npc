@@ -115,6 +115,13 @@ class EnvironmentAgent:
         return [format_clock(t) for t in self._planned_arrivals if t < day_end]
 
     @property
+    def elapsed_minutes(self) -> int:
+        """Game-minutes since midnight of day 0 -- never wraps, unlike
+        minute_of_day, so it can measure how long something has lasted.
+        """
+        return self._elapsed_minutes
+
+    @property
     def time_of_day(self) -> TimeOfDay:
         return phase_for_minute(self.minute_of_day)
 

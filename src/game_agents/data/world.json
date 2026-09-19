@@ -1,0 +1,14 @@
+{
+  "places": [
+    {
+      "name": "The Forge",
+      "position": [12, -30],
+      "description": "Mara's blacksmith shop, inherited from her mother. A soot-blackened stone workshop with a roaring hearth, an anvil out front, and racks of horseshoes, hinges, and tools for sale. The ring of the hammer carries across town from sunrise to dusk."
+    },
+    {
+      "name": "The Docks",
+      "position": [70, 45],
+      "description": "A weathered wooden pier on the water's edge where Finn fishes. Nets hang drying on the posts, a few small boats are tied up, and travelers passing through often stop here to rest and swap news."
+    }
+  ]
+}

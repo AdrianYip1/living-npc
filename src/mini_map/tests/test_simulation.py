@@ -52,6 +52,44 @@ class _CountingLLM:
         return self._inner.complete(system=system, messages=messages, tools=tools)
 
 
+_NPCS_JSON_KEYS = (
+    "name", "traits", "backstory", "speech_style", "goals",
+    "home", "workplace", "habits", "starting_money", "starting_items",
+)
+
+
+class _IdentityLLM:
+    """Answers traveler-identity requests with a fixed identity (optionally
+    after blocking on an Event, to simulate a slow backend); anything else
+    goes to the mock.
+    """
+
+    def __init__(self, name, block_until=None):
+        self._name = name
+        self._block_until = block_until
+
+    def complete(self, *, system, messages, tools):
+        if tools and tools[0]["name"] == "create_identity":
+            if self._block_until is not None:
+                self._block_until.wait(timeout=5)
+            return LLMResult(
+                tool_call=ToolCall(
+                    name="create_identity",
+                    arguments={
+                        "name": self._name,
+                        "traits": ["wry"],
+                        "backstory": "A cartographer mapping the coast road.",
+                        "speech_style": "precise",
+                        "goals": ["finish the map"],
+                        "habits": ["Sketches the town square"],
+                        "starting_money": 20,
+                        "starting_items": {"map": 1},
+                    },
+                )
+            )
+        return MockLLMClient().complete(system=system, messages=messages, tools=tools)
+
+
 def _registry(tmp, llm, *, names=("Mara", "Finn"), **kwargs) -> NPCRegistry:
     npcs_path = Path(tmp) / "npcs.json"
     save_identities([_identity(n) for n in names], npcs_path)
@@ -120,12 +158,41 @@ class TravelerArrivalTests(unittest.TestCase):
 
             for _ in range(1440):  # one full in-game day at 1 min/tick
                 sim._advance_environment()
+            sim.wait_for_pending_travelers(timeout=5)
 
             arrivals = sim.state()["traveler_arrivals"]
             self.assertEqual([a["id"] for a in arrivals], [1, 2, 3])
             for arrival in arrivals:
-                self.assertTrue(arrival["name"])
+                self.assertEqual(set(arrival["identity"]), set(_NPCS_JSON_KEYS))
+                self.assertTrue(arrival["identity"]["name"])
                 self.assertRegex(arrival["arrived_at"], r"^\d\d:\d\d$")
+
+    def test_llm_generated_identity_is_what_lands_in_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, _IdentityLLM("Selwyn"))
+            sim = Simulation(registry, EnvironmentAgent(travelers_per_day=(1, 1), start_minute=0, minutes_per_tick=1440, seed=1))
+            sim._advance_environment()
+            sim.wait_for_pending_travelers(timeout=5)
+
+            identity = sim.state()["traveler_arrivals"][0]["identity"]
+            self.assertEqual(identity["name"], "Selwyn")
+            self.assertEqual(identity["starting_items"], {"map": 1})
+
+    def test_slow_identity_generation_does_not_block_the_environment_tick(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            release = threading.Event()
+            registry = _registry(tmp, _IdentityLLM("Selwyn", block_until=release))
+            environment = EnvironmentAgent(travelers_per_day=(1, 1), start_minute=0, minutes_per_tick=1440, seed=1)
+            sim = Simulation(registry, environment)
+            try:
+                started = time.monotonic()
+                sim._advance_environment()  # queues the (blocked) generation
+                self.assertLess(time.monotonic() - started, 1.0)
+                self.assertEqual(sim.state()["traveler_arrivals"], [])  # not ready yet
+            finally:
+                release.set()
+            sim.wait_for_pending_travelers(timeout=5)
+            self.assertEqual(len(sim.state()["traveler_arrivals"]), 1)
 
     def test_no_arrivals_when_the_environment_sends_none(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -143,6 +210,7 @@ class TravelerArrivalTests(unittest.TestCase):
             sim = Simulation(registry, environment)
             for _ in range(5):
                 sim._advance_environment()
+            sim.wait_for_pending_travelers(timeout=5)
 
             ids = [a["id"] for a in sim.state()["traveler_arrivals"]]
             self.assertEqual(len(ids), Simulation.RECENT_TRAVELERS)

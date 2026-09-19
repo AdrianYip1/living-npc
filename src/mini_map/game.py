@@ -41,6 +41,11 @@ TICKS_PER_REAL_MINUTE = 60.0
 # 4 calls/game-hr x 1 game-hr/real-min (at the default tick rate above) = 4
 # calls/real-min, i.e. one query round every 15s -- matches the old default.
 LLM_CALLS_PER_GAME_HOUR = 4.0
+# Inclusive (min, max) traveler arrivals per in-game day. Deliberately high
+# for now so travelers are easy to spot: at the default clock speed (a day
+# every 24 real minutes) 20-60 is one every ~36 real seconds on average.
+# EnvironmentAgent's own default is a more realistic (2, 6).
+TRAVELERS_PER_DAY = (20, 60)
 
 # Set by run() before the server starts; the handler reads it per-request.
 # A single-process script gets to have one simulation as shared state
@@ -137,7 +142,7 @@ def run(
     global _simulation
 
     registry, backend = build_registry()
-    environment = EnvironmentAgent()
+    environment = EnvironmentAgent(travelers_per_day=TRAVELERS_PER_DAY)
     _simulation = Simulation(
         registry,
         environment,

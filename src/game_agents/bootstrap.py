@@ -20,6 +20,7 @@ MEMORY_DIR = DATA_DIR / "memory"
 INSTRUCTIONS_PATH = DATA_DIR / "instructions.json"
 CONVERSATION_LOG_DIR = DATA_DIR / "conversation_log"
 INVENTORY_DIR = DATA_DIR / "inventory"
+WORLD_PATH = DATA_DIR / "world.json"
 
 _BACKENDS: dict[str, type[LLMClient]] = {
     "mock": MockLLMClient,
@@ -69,6 +70,7 @@ def build_registry() -> tuple[NPCRegistry, str]:
             instructions_path=INSTRUCTIONS_PATH,
             conversation_log_dir=CONVERSATION_LOG_DIR,
             inventory_dir=INVENTORY_DIR,
+            world_path=WORLD_PATH,
         ),
         backend,
     )

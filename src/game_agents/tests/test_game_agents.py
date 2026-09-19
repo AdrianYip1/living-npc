@@ -19,6 +19,8 @@ from game_agents.storage import (
     load_inventory,
     load_memory,
     load_profile_template,
+    load_places,
+    render_places,
     save_identities,
     save_memory,
 )
@@ -185,6 +187,38 @@ class RegistryTests(unittest.TestCase):
             save_identities([], npcs_path)
             registry = NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient())
             self.assertIsNone(registry.get("Nobody"))
+
+
+class WorldContextTests(unittest.TestCase):
+    def _write_world(self, tmp: str) -> Path:
+        path = Path(tmp) / "world.json"
+        path.write_text(
+            json.dumps({"places": [{"name": "The Forge", "position": [12, -30], "description": "Hot and loud."}]}),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_renders_each_place_with_coordinates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            context = render_places(load_places(self._write_world(tmp)))
+            self.assertIn("The Forge at (12, -30): Hot and loud.", context)
+
+    def test_missing_world_file_returns_empty_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(load_places(Path(tmp) / "nope.json"), [])
+
+    def test_residents_and_travelers_both_see_places(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            npcs_path = Path(tmp) / "npcs.json"
+            save_identities([_identity("A")], npcs_path)
+            registry = NPCRegistry(
+                npcs_path, Path(tmp) / "memory", MockLLMClient(), world_path=self._write_world(tmp)
+            )
+            traveler = registry.add_traveler(_identity("T"), position=(0, 0), standing_context="Exit: (100, 0)")
+            self.assertIn("The Forge", registry.get("A")._build_system_prompt(Scene(), []))
+            traveler_prompt = traveler._build_system_prompt(Scene(), [])
+            self.assertIn("The Forge", traveler_prompt)
+            self.assertIn("Exit: (100, 0)", traveler_prompt)
 
 
 class AgentPositionTests(unittest.TestCase):
