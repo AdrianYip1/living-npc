@@ -49,7 +49,9 @@ HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	faceWeights.resize(count);
 	npcTransforms.resize(count, enginemath::Mat4::identity());
 	npcAnimStates.resize(count, AnimState::IDLE);
+	npcPrevAnimStates.resize(count, AnimState::IDLE);
 	npcAnimTimes.resize(count, 0.0f);
+	npcBlendTimers.resize(count, 0.0f);
 	f32 spacing = 1.5f;
 	f32 startX = -spacing * (count - 1) * 0.5f;
 	for (u32 i = 0; i < count; i++) {
@@ -144,6 +146,16 @@ void HTN::Renderer::drawFrame() {
 	allJoints.reserve(MAX_JOINTS * count);
 	for (u32 i = 0; i < count; i++) {
 		auto pal = skeleton.computePalette(npcAnimStates[i], npcAnimTimes[i], inverseBindMatrices);
+		if (npcBlendTimers[i] > 0.0f) {
+			npcBlendTimers[i] -= dt;
+			f32 t = 1.0f - npcBlendTimers[i] / BLEND_DURATION;
+			if (t > 1.0f) t = 1.0f;
+			auto prev = skeleton.computePalette(npcPrevAnimStates[i], npcAnimTimes[i], inverseBindMatrices);
+			for (u32 j = 0; j < pal.size(); j++)
+				for (int c = 0; c < 4; c++)
+					for (int r = 0; r < 4; r++)
+						pal[j].m[c][r] = prev[j].m[c][r] * (1.0f - t) + pal[j].m[c][r] * t;
+		}
 		allJoints.insert(allJoints.end(), pal.begin(), pal.end());
 	}
 
@@ -528,6 +540,14 @@ void HTN::Renderer::initImGui() {
 	initInfo.PipelineInfoMain.MSAASamples = device.getMSAASampleCount();
 
 	ImGui_ImplVulkan_Init(&initInfo);
+}
+
+void HTN::Renderer::setNPCAnimState(u32 slot, AnimState state) {
+	if (npcAnimStates[slot] != state) {
+		npcPrevAnimStates[slot] = npcAnimStates[slot];
+		npcAnimStates[slot] = state;
+		npcBlendTimers[slot] = BLEND_DURATION;
+	}
 }
 
 bool HTN::Renderer::anyBusy() const {

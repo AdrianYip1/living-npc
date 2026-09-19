@@ -38,7 +38,7 @@ namespace HTN {
 		u32 faceCount() const { return static_cast<u32>(faces.size()); }
 		bool anyBusy() const;
 		void setNPCTransform(u32 slot, const enginemath::Mat4& t) { npcTransforms[slot] = t; }
-		void setNPCAnimState(u32 slot, AnimState state) { npcAnimStates[slot] = state; }
+		void setNPCAnimState(u32 slot, AnimState state);
 		const WorldBounds& getWorldBounds() const { return WORLD_BOUNDS; }
 
 	private:
@@ -75,7 +75,10 @@ namespace HTN {
 		std::vector<enginemath::Mat4> npcTransforms;
 		std::vector<enginemath::Mat4> inverseBindMatrices;
 		std::vector<AnimState> npcAnimStates;
+		std::vector<AnimState> npcPrevAnimStates;
 		std::vector<f32> npcAnimTimes;
+		std::vector<f32> npcBlendTimers;
+		static constexpr f32 BLEND_DURATION = 0.3f;
 		Clock animClock;
 
 		u32 currentFrame = 0;
