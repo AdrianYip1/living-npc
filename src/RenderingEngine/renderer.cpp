@@ -37,8 +37,40 @@ HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	initImGui();
 	createSyncObjects();
 
-	animator = std::make_unique<faceAnim>();
-	animator->setupSpeech();
+	skeleton.loadAnimation(AnimState::IDLE, "models/idle_anim.gltf");
+	skeleton.loadAnimation(AnimState::TALK, "models/talking_anim.gltf",
+		{"Head", "Neck", "HeadTop_End"});
+
+	u32 count = npcCount();
+	faces.resize(count);
+	faceWeights.resize(count);
+	npcTransforms.resize(count, enginemath::Mat4::identity());
+	npcAnimStates.resize(count, AnimState::IDLE);
+	npcAnimTimes.resize(count, 0.0f);
+	f32 spacing = 1.5f;
+	f32 startX = -spacing * (count - 1) * 0.5f;
+	for (u32 i = 0; i < count; i++) {
+		faceWeights[i].assign(MAX_WEIGHTS, 0.0f);
+		npcTransforms[i] = enginemath::Mat4::translationM(startX + i * spacing, 0.0f, 0.0f);
+		faces[i] = std::make_unique<faceAnim>();
+		faces[i]->setupSpeech();
+	}
+
+	const WorldBounds& b = WORLD_BOUNDS;
+	std::string dir = CONVO_LOG_DIR;
+	std::ofstream boundsOut(dir + "/bounds.json", std::ios::trunc);
+	if (boundsOut) {
+		boundsOut << "{\"minX\":" << b.minX << ",\"maxX\":" << b.maxX
+				  << ",\"minZ\":" << b.minZ << ",\"maxZ\":" << b.maxZ
+				  << ",\"obstacles\":[";
+		for (size_t i = 0; i < OBSTACLES.size(); i++) {
+			if (i) boundsOut << ",";
+			boundsOut << "{\"x\":" << OBSTACLES[i].x
+					  << ",\"z\":" << OBSTACLES[i].z
+					  << ",\"r\":" << OBSTACLES[i].radius << "}";
+		}
+		boundsOut << "]}";
+	}
 }
 
 HTN::Renderer::~Renderer() {
@@ -95,14 +127,26 @@ void HTN::Renderer::drawFrame() {
 	ubo.proj = camera.getProj();
 	ubo.time = elapsed;
 
-	faceWeights = animator->sample();
-	f32 animElapsed = animClock.elapsedMs() / 1000.0f;
-	auto palette = skeleton.computePalette(animElapsed, inverseBindMatrices);
+	u32 count = npcCount();
+	f32 dt = animClock.elapsedMs() / 1000.0f;
+	animClock.resetTime();
+
+	for (u32 s = 0; s < count; s++) {
+		npcAnimTimes[s] += dt;
+		faceWeights[s] = faces[s]->sample();
+		uniform.updateWeightBuffer(currentFrame, s, faceWeights[s]);
+	}
+
+	std::vector<enginemath::Mat4> allJoints;
+	allJoints.reserve(MAX_JOINTS * count);
+	for (u32 i = 0; i < count; i++) {
+		auto pal = skeleton.computePalette(npcAnimStates[i], npcAnimTimes[i], inverseBindMatrices);
+		allJoints.insert(allJoints.end(), pal.begin(), pal.end());
+	}
 
 	uniform.updateUniformBuffer(currentFrame, ubo);
 	uniform.updateLightBuffer(currentFrame, light);
-	uniform.updateWeightBuffer(currentFrame, faceWeights);
-	uniform.updateJointBuffer(currentFrame, palette);
+	uniform.updateJointBuffer(currentFrame, allJoints);
 
 	ImGui_ImplVulkan_NewFrame();
 	ImGui_ImplGlfw_NewFrame();
@@ -117,18 +161,18 @@ void HTN::Renderer::drawFrame() {
 
 	static char ttsText[512] = "Hello, I am a living NPC. Nice to meet you!";
 	ImGui::InputText("Text", ttsText, sizeof(ttsText));
-	if (ImGui::Button("Speak") && !animator->isBusy()) {
-		animator->startSpeaking(std::string(ttsText));
+	if (ImGui::Button("Speak") && !faces[0]->isBusy()) {
+		faces[0]->startSpeaking(std::string(ttsText));
 	}
 	ImGui::SameLine();
-	if (animator->isBusy()) ImGui::Text("Speaking...");
+	if (faces[0]->isBusy()) ImGui::Text("Speaking...");
 
 	ImGui::End();
 
 	ImGui::Render();
 
 	drawing.recordCommandBuffer(drawing.getCommandBuffer(currentFrame), swapchainImageIndex,
-								materialSets, currentFrame, model,
+								materialSets, currentFrame, model, npcTransforms,
 								hasScene ? &sceneModel : nullptr,
 								hasScene ? &scenePipeline : nullptr,
 								&skyboxPipeline, skyboxSets);
@@ -461,6 +505,12 @@ void HTN::Renderer::initImGui() {
 	initInfo.PipelineInfoMain.MSAASamples = device.getMSAASampleCount();
 
 	ImGui_ImplVulkan_Init(&initInfo);
+}
+
+bool HTN::Renderer::anyBusy() const {
+	for (auto& f : faces)
+		if (f->isBusy()) return true;
+	return false;
 }
 
 void HTN::Renderer::wait() {

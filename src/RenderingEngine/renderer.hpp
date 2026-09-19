@@ -14,6 +14,7 @@
 #include "Platform/window.hpp"
 #include "Core/camera.hpp"
 #include "../ProceduralAnimation/faceAnimator.hpp"
+#include "../npcConfig.hpp"
 #include "Utility/raycast.hpp"
 
 #include <memory>
@@ -33,6 +34,13 @@ namespace HTN {
 		const CollisionMesh& getCollision() const { return collisionMesh; }
 		const GroundGrid& getGroundGrid() const { return groundGrid; }
 
+		faceAnim& getFace(u32 slot) { return *faces[slot]; }
+		u32 faceCount() const { return static_cast<u32>(faces.size()); }
+		bool anyBusy() const;
+		void setNPCTransform(u32 slot, const enginemath::Mat4& t) { npcTransforms[slot] = t; }
+		void setNPCAnimState(u32 slot, AnimState state) { npcAnimStates[slot] = state; }
+		const WorldBounds& getWorldBounds() const { return WORLD_BOUNDS; }
+
 	private:
 		Window& window;
 		Camera& camera;
@@ -46,7 +54,7 @@ namespace HTN {
 		Model sceneModel;
 		Skeleton skeleton;
 
-		std::unique_ptr<faceAnim> animator;
+		std::vector<std::unique_ptr<faceAnim>> faces;
 
 		VkDescriptorPool descriptorPool;
 		VkDescriptorPool imguiPool;
@@ -63,8 +71,11 @@ namespace HTN {
 		CollisionMesh collisionMesh;
 		GroundGrid groundGrid;
 		LightUBO light;
-		std::vector<f32> faceWeights = std::vector<f32>(MAX_WEIGHTS, 0.0f);
+		std::vector<std::vector<f32>> faceWeights;
+		std::vector<enginemath::Mat4> npcTransforms;
 		std::vector<enginemath::Mat4> inverseBindMatrices;
+		std::vector<AnimState> npcAnimStates;
+		std::vector<f32> npcAnimTimes;
 		Clock animClock;
 
 		u32 currentFrame = 0;
