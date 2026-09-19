@@ -66,13 +66,13 @@ namespace HTN {
 	};
 
 	struct MorphPush {
-		enginemath::Mat4 model;
-		u32 morphStartIndex;
-		u32 targetCount;
-		u32 vertexOffset;
-		u32 vertexCount;
-		u32 weightsStartIndex;
-		u32 weightBase;
+		enginemath::Mat4 model = enginemath::Mat4::identity();
+		u32 morphStartIndex = 0;
+		u32 targetCount = 0;
+		u32 vertexOffset = 0;
+		u32 vertexCount = 0;
+		u32 weightsStartIndex = 0;
+		u32 weightBase = 0;
 	};
 
 	struct fModel {
