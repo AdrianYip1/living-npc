@@ -233,6 +233,47 @@ class AgentTurnTests(unittest.TestCase):
         self.assertEqual(memory.importance, 7)  # acted -> the higher heuristic band
 
 
+class RoutineTurnMemoryTests(unittest.TestCase):
+    """Routine (unprompted, world-tick) turns only leave a memory when the
+    NPC did something consequential -- otherwise idle ticks would flood the
+    top-ranked memories and push real interactions out.
+    """
+
+    def _agent(self, tool_call: ToolCall) -> Agent:
+        tools = ToolRegistry()
+        for name in ("move_to", "buy_item"):
+            tools.register(
+                Tool(name=name, description=name, parameters={"type": "object", "properties": {}}, handler=lambda: "ok")
+            )
+        return Agent(_identity("Mara"), _FixedLLM(tool_call), tools)
+
+    def test_routine_move_is_not_remembered(self):
+        agent = self._agent(ToolCall(name="move_to", arguments={}))
+        result = agent.respond("It is now 08:15 (morning).", routine=True)
+
+        self.assertEqual(result.action["name"], "move_to")
+        self.assertEqual(agent.memory.all(), [])
+
+    def test_routine_speech_is_not_remembered(self):
+        agent = self._agent(ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "nice day"}))
+        result = agent.respond("It is now 08:15 (morning).", routine=True)
+
+        self.assertEqual(result.utterance, "nice day")
+        self.assertEqual(agent.memory.all(), [])
+
+    def test_routine_consequential_action_is_remembered(self):
+        agent = self._agent(ToolCall(name="buy_item", arguments={}))
+        agent.respond("It is now 08:15 (morning).", routine=True)
+
+        self.assertEqual(len(agent.memory.all()), 1)
+
+    def test_non_routine_move_is_still_remembered(self):
+        agent = self._agent(ToolCall(name="move_to", arguments={}))
+        agent.respond("Meet me at the forge.")
+
+        self.assertEqual(len(agent.memory.all()), 1)
+
+
 class SpeakOrActionSchemaTests(unittest.TestCase):
     """The core contract from this step: every turn resolves to exactly one
     of utterance/action, never both, never neither -- and `speak` is always

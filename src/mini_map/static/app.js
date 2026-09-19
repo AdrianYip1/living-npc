@@ -18,7 +18,8 @@
 //
 // Travelers are decided by the environment agent (how many per in-game
 // day, and when -- see environment_agent/agent.py) and show up in
-// /api/state's traveler_arrivals, each with an id. The page spawns each
+// /api/state's traveler_arrivals, each with an id and an LLM-generated
+// identity in the same shape as an npcs.json entry. The page spawns each
 // new id once: it drifts in from a random map edge, fades in, walks a
 // straight placeholder line across the map, and is removed the moment it
 // crosses back outside the map bounds. That walk is still client-only --
@@ -36,7 +37,6 @@ const MAX_SPEED = 260; // world px/sec
 const ACCEL = 900; // px/sec^2 while a move key is held
 const DECEL = 1400; // px/sec^2 once keys are released
 const NPC_COLORS = ["#e91e63", "#2196f3", "#ff9800", "#9c27b0", "#00bcd4"];
-const TRAVELER_SPEED = 70; // world units/sec
 const TRAVELER_FADE_SECONDS = 1.2;
 const GAME_BOUND = 100; // matches game_agents/world.py's MAP_MIN/MAX
 const WORLD_SCALE = MAP_HALF / GAME_BOUND; // backend coord -> canvas world unit
@@ -176,7 +176,7 @@ function spawnNewTravelers(arrivals) {
   for (const arrival of arrivals) {
     if (arrival.id > lastTravelerId) {
       spawnTraveler(arrival);
-      appendLogLine(`A traveler arrives at ${arrival.arrived_at}: ${arrival.name}, ${arrival.origin}, ${arrival.reason}.`, { system: true });
+      appendLogLine(`A traveler arrives at ${arrival.arrived_at}: ${arrival.identity.name}. ${arrival.identity.backstory}`, { system: true });
     }
   }
   lastTravelerId = Math.max(lastTravelerId, maxId);
@@ -232,20 +232,23 @@ function spawnTraveler(arrival) {
   // Aim roughly across the map, not straight along the edge, with some
   // spread so travelers don't all cut the exact same line.
   const angle = inwardAngle + (Math.random() * (Math.PI / 3) - Math.PI / 6);
-  const speed = TRAVELER_SPEED * (0.8 + Math.random() * 0.4);
+  // Walked toward with stepToward() -- the same MAX_SPEED / ACCEL / DECEL
+  // as the player and NPCs. The target sits a full map-width past the far
+  // edge, so the traveler leaves the map (and gets removed) while still at
+  // cruising speed, never braking for it.
+  const exitDistance = MAP_SIZE * 2;
 
   travelers.push({
     id: arrival.id,
-    name: arrival.name,
-    origin: arrival.origin,
-    reason: arrival.reason,
-    traits: arrival.traits,
+    name: arrival.identity.name,
+    identity: arrival.identity,
     color: NPC_COLORS[Math.floor(Math.random() * NPC_COLORS.length)],
     isTraveler: true, // no backend counterpart -- conversation panel stays local-only for these
     x,
     y,
-    vx: Math.cos(angle) * speed,
-    vy: Math.sin(angle) * speed,
+    vx: 0,
+    vy: 0,
+    destination: { x: x + Math.cos(angle) * exitDistance, y: y + Math.sin(angle) * exitDistance },
     opacity: 0,
   });
 }
@@ -519,8 +522,7 @@ function updateNpcs(dt) {
 function updateTravelers(dt) {
   for (let i = travelers.length - 1; i >= 0; i--) {
     const traveler = travelers[i];
-    traveler.x += traveler.vx * dt;
-    traveler.y += traveler.vy * dt;
+    stepToward(traveler, traveler.destination, dt);
     traveler.opacity = Math.min(1, traveler.opacity + dt / TRAVELER_FADE_SECONDS);
 
     if (Math.abs(traveler.x) > MAP_HALF || Math.abs(traveler.y) > MAP_HALF) {

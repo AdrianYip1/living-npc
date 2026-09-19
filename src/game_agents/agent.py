@@ -27,6 +27,11 @@ class Scene:
         return "\n".join(lines)
 
 
+# Actions that don't change anything anyone else would notice -- on a
+# routine turn (see Agent.respond), taking one of these isn't worth a memory.
+ROUTINE_ACTIONS = frozenset({"wait", "move_to", "check_inventory"})
+
+
 @dataclass
 class TurnResult:
     utterance: str | None
@@ -71,7 +76,16 @@ class Agent:
             else Inventory(money=identity.starting_money, items=dict(identity.starting_items))
         )
 
-    def respond(self, stimulus: str, *, scene: Scene | None = None, tags: set[str] | None = None) -> TurnResult:
+    def respond(
+        self, stimulus: str, *, scene: Scene | None = None, tags: set[str] | None = None, routine: bool = False
+    ) -> TurnResult:
+        """`routine` marks a turn nobody prompted (e.g. the world tick's
+        "It is now 08:15"): it's only remembered if the NPC did something
+        consequential (a trade, starting a conversation). Otherwise every
+        tick's "walked to (x, y)" would crowd real interactions out of the
+        top memories -- current position and destination are already in the
+        system prompt, so nothing is lost by dropping them.
+        """
         scene = scene or Scene()
         relevant = self.memory.retrieve(tags=tags)
 
@@ -91,6 +105,9 @@ class Agent:
             tool_result = self.tools.execute(call.name, call.arguments)
             action = {"name": call.name, "arguments": call.arguments, "result": tool_result}
             memory_content = f"{stimulus} -> [action] {call.name}({call.arguments}) -> {tool_result}"
+
+        if routine and (action is None or action["name"] in ROUTINE_ACTIONS):
+            return TurnResult(utterance=utterance, action=action)
 
         self.memory.add(memory_content, importance=self._score_importance(result), tags=tags or set())
 

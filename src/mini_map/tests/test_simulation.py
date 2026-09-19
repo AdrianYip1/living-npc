@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
 import tempfile
 import threading
 import time
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -32,6 +34,22 @@ class _NameAwareLLM:
         if system.startswith("You are Mara."):
             return LLMResult(tool_call=ToolCall(name="initiate_conversation", arguments={"target_name": "Finn"}))
         return LLMResult(tool_call=ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "hello"}))
+
+
+class _CountingLLM:
+    """Wraps another LLM and counts calls per NPC, told apart the same way
+    as _NameAwareLLM. Memory can't stand in for "was queried" -- routine
+    world-tick turns deliberately leave no memory (see Agent.respond).
+    """
+
+    def __init__(self, inner=None):
+        self._inner = inner or MockLLMClient()
+        self.calls: Counter[str] = Counter()
+
+    def complete(self, *, system, messages, tools):
+        match = re.match(r"You are (\w+)\.", system)
+        self.calls[match.group(1) if match else ""] += 1
+        return self._inner.complete(system=system, messages=messages, tools=tools)
 
 
 def _registry(tmp, llm, *, names=("Mara", "Finn"), **kwargs) -> NPCRegistry:
@@ -160,7 +178,8 @@ class SimulationPauseTests(unittest.TestCase):
 
     def test_run_forever_does_not_advance_or_query_npcs_while_paused(self):
         with tempfile.TemporaryDirectory() as tmp:
-            registry = _registry(tmp, MockLLMClient())
+            llm = _CountingLLM()
+            registry = _registry(tmp, llm)
             environment = EnvironmentAgent(seed=1)
             initial_minute = environment.minute_of_day
             # ticks_per_real_minute=3000 -> tick_interval_s=0.02;
@@ -174,15 +193,15 @@ class SimulationPauseTests(unittest.TestCase):
             try:
                 time.sleep(0.2)
                 self.assertEqual(environment.minute_of_day, initial_minute)
-                self.assertEqual(registry.get("Mara").memory.all(), [])
-                self.assertEqual(registry.get("Finn").memory.all(), [])
+                self.assertEqual(llm.calls, Counter())
             finally:
                 sim.stop()
                 thread.join(timeout=2)
 
     def test_run_forever_resumes_advancing_after_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
-            registry = _registry(tmp, MockLLMClient())
+            llm = _CountingLLM()
+            registry = _registry(tmp, llm)
             environment = EnvironmentAgent(seed=1)
             sim = Simulation(registry, environment, ticks_per_real_minute=3000, llm_calls_per_game_hour=60)
             sim.pause()
@@ -195,7 +214,7 @@ class SimulationPauseTests(unittest.TestCase):
                 time.sleep(0.2)
                 # Several rounds could fire in this window at a 0.02s
                 # interval -- the point is just that it's no longer zero.
-                self.assertGreaterEqual(len(registry.get("Mara").memory.all()), 1)
+                self.assertGreaterEqual(llm.calls["Mara"], 1)
             finally:
                 sim.stop()
                 thread.join(timeout=2)
@@ -204,24 +223,36 @@ class SimulationPauseTests(unittest.TestCase):
 class SimulationTickTests(unittest.TestCase):
     def test_tick_stimulates_every_idle_npc_once(self):
         with tempfile.TemporaryDirectory() as tmp:
+            llm = _CountingLLM()
+            registry = _registry(tmp, llm)
+            sim = Simulation(registry, EnvironmentAgent(seed=1))
+
+            sim.tick()
+
+            self.assertEqual(llm.calls, Counter({"Mara": 1, "Finn": 1}))
+
+    def test_routine_idle_turns_leave_no_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
             registry = _registry(tmp, MockLLMClient())
             sim = Simulation(registry, EnvironmentAgent(seed=1))
 
             sim.tick()
 
-            self.assertEqual(len(registry.get("Mara").memory.all()), 1)
-            self.assertEqual(len(registry.get("Finn").memory.all()), 1)
+            # Mock NPCs just speak on the tick -- routine, so nothing to
+            # crowd real interactions out of their top memories.
+            self.assertEqual(registry.get("Mara").memory.all(), [])
+            self.assertEqual(registry.get("Finn").memory.all(), [])
 
     def test_busy_npc_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
-            registry = _registry(tmp, MockLLMClient())
+            llm = _CountingLLM()
+            registry = _registry(tmp, llm)
             registry.try_occupy_pair("Mara", "Finn")
             sim = Simulation(registry, EnvironmentAgent(seed=1))
 
             sim.tick()
 
-            self.assertEqual(registry.get("Mara").memory.all(), [])
-            self.assertEqual(registry.get("Finn").memory.all(), [])
+            self.assertEqual(llm.calls, Counter())
 
     def test_conversation_target_is_not_independently_ticked_again(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,15 +268,16 @@ class SimulationTickTests(unittest.TestCase):
 
     def test_refused_conversation_leaves_the_target_free_to_act(self):
         with tempfile.TemporaryDirectory() as tmp:
-            registry = _registry(tmp, _NameAwareLLM(), conversation_turns=2)
+            llm = _CountingLLM(_NameAwareLLM())
+            registry = _registry(tmp, llm, conversation_turns=2)
             registry.get("Finn").position = (50, 50)  # out of Mara's range
             sim = Simulation(registry, EnvironmentAgent(seed=1))
 
             sim.tick()
 
             # No conversation happened, so Finn still gets his own turn
-            # (one memory, from speaking) instead of a bogus "talked with Mara".
-            self.assertEqual(len(registry.get("Finn").memory.all()), 1)
+            # instead of a bogus "talked with Mara".
+            self.assertEqual(llm.calls["Finn"], 1)
             finn_state = next(n for n in sim.state()["npcs"] if n["name"] == "Finn")
             self.assertEqual(finn_state["activity"], "said: hello")
 
@@ -329,15 +361,16 @@ class SimulationPlayerConversationTests(unittest.TestCase):
 
     def test_start_conversation_claims_busy_and_blocks_the_world_tick(self):
         with tempfile.TemporaryDirectory() as tmp:
-            registry = _registry(tmp, MockLLMClient())
+            llm = _CountingLLM()
+            registry = _registry(tmp, llm)
             sim = Simulation(registry, EnvironmentAgent(seed=1))
 
             self.assertTrue(sim.start_conversation("Mara"))
             self.assertTrue(registry.is_busy("Mara"))
 
             sim.tick()
-            self.assertEqual(registry.get("Mara").memory.all(), [])  # skipped, busy talking to the player
-            self.assertEqual(len(registry.get("Finn").memory.all()), 1)  # unaffected
+            self.assertEqual(llm.calls["Mara"], 0)  # skipped, busy talking to the player
+            self.assertEqual(llm.calls["Finn"], 1)  # unaffected
 
     def test_start_conversation_fails_for_an_unknown_npc(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -356,7 +389,8 @@ class SimulationPlayerConversationTests(unittest.TestCase):
 
     def test_end_conversation_frees_the_npc_for_the_next_tick(self):
         with tempfile.TemporaryDirectory() as tmp:
-            registry = _registry(tmp, MockLLMClient())
+            llm = _CountingLLM()
+            registry = _registry(tmp, llm)
             sim = Simulation(registry, EnvironmentAgent(seed=1))
             sim.start_conversation("Mara")
 
@@ -364,7 +398,7 @@ class SimulationPlayerConversationTests(unittest.TestCase):
 
             self.assertFalse(registry.is_busy("Mara"))
             sim.tick()
-            self.assertEqual(len(registry.get("Mara").memory.all()), 1)
+            self.assertEqual(llm.calls["Mara"], 1)
 
     def test_say_returns_the_utterance_and_records_a_player_tagged_memory(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -8,12 +8,18 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import wait as wait_futures
 from typing import Any
 
 from environment_agent.agent import EnvironmentAgent
+from environment_agent.travelers import Traveler
 
 from game_agents.agent import Scene, TurnResult
+from game_agents.identity import Identity
 from game_agents.registry import NPCRegistry, conversation_happened
+from game_agents.storage import identity_to_record
+from game_agents.traveler_identity import generate_traveler_identity
 
 
 class Simulation:
@@ -50,6 +56,12 @@ class Simulation:
     A third loop steps NPC walking physics (NPCRegistry.step_movement) at
     MOVEMENT_HZ in *real* time, not game time -- NPCs walk at the same
     on-screen speed as the player no matter how fast the clock runs.
+
+    Traveler arrivals come from the environment agent as a short sketch;
+    each is expanded into a full Identity (npcs.json format) by the LLM on
+    a small worker pool, not the environment thread -- same reasoning as
+    above: a slow LLM call must not stall the clock. An arrival shows up in
+    state() once its identity is ready.
     """
 
     MOVEMENT_HZ = 30.0
@@ -87,11 +99,13 @@ class Simulation:
         self._last_activity: dict[str, str] = {}
         # Travelers the environment agent sent in, tagged with an ever-
         # increasing id so the page can tell new arrivals from ones it has
-        # already spawned. Appended on the environment thread, copied out
-        # by state() on the HTTP thread -- hence the lock.
+        # already spawned. Appended by the identity worker threads, copied
+        # out by state() on the HTTP thread -- hence the lock.
         self._traveler_arrivals: list[dict[str, Any]] = []
         self._next_traveler_id = 1
         self._traveler_lock = threading.Lock()
+        self._identity_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="traveler-identity")
+        self._pending_identities: list[Future] = []
 
     def run_forever(self) -> None:
         env_thread = threading.Thread(target=self._run_environment_loop, daemon=True)
@@ -106,6 +120,14 @@ class Simulation:
 
     def stop(self) -> None:
         self._stop.set()
+        self._identity_pool.shutdown(wait=False, cancel_futures=True)
+
+    def wait_for_pending_travelers(self, timeout: float | None = None) -> None:
+        """Blocks until every traveler identity queued so far is generated
+        -- for tests and other callers that need arrivals to have landed in
+        state() before they look.
+        """
+        wait_futures(list(self._pending_identities), timeout=timeout)
 
     def pause(self) -> None:
         self._paused.set()
@@ -150,21 +172,31 @@ class Simulation:
 
     def _advance_environment(self) -> None:
         event = self._environment.tick()
-        if not event.travelers_arrived:
-            return
+        self._pending_identities = [f for f in self._pending_identities if not f.done()]
+        for traveler in event.travelers_arrived:
+            try:
+                future = self._identity_pool.submit(self._admit_traveler, traveler, event.clock)
+            except RuntimeError:  # pool already shut down by stop()
+                return
+            self._pending_identities.append(future)
+
+    def _admit_traveler(self, sketch: Traveler, clock: str) -> None:
         with self._traveler_lock:
-            for traveler in event.travelers_arrived:
-                self._traveler_arrivals.append(
-                    {
-                        "id": self._next_traveler_id,
-                        "name": traveler.name,
-                        "origin": traveler.origin,
-                        "reason": traveler.reason,
-                        "traits": list(traveler.traits),
-                        "arrived_at": event.clock,
-                    }
-                )
-                self._next_traveler_id += 1
+            recent_names = [arrival["identity"]["name"] for arrival in self._traveler_arrivals]
+        identity = generate_traveler_identity(
+            self._registry.llm,
+            _traveler_brief(sketch),
+            fallback=_fallback_identity(sketch),
+            taken_names=[agent.identity.name for agent in self._registry.all()] + recent_names,
+        )
+        # The id is assigned only now, once the identity exists, so ids in
+        # state() always appear in increasing order even if two
+        # generations finish out of order.
+        with self._traveler_lock:
+            self._traveler_arrivals.append(
+                {"id": self._next_traveler_id, "arrived_at": clock, "identity": identity_to_record(identity)}
+            )
+            self._next_traveler_id += 1
             del self._traveler_arrivals[: -self.RECENT_TRAVELERS]
 
     def _query_npcs(self) -> None:
@@ -185,7 +217,7 @@ class Simulation:
                 time=f"{clock} ({phase})",
                 context=f"It's {clock}, {phase}, and {weather} out. Decide what you do right now, guided by your habits.",
             )
-            result = agent.respond(f"It is now {clock} ({phase}).", scene=scene)
+            result = agent.respond(f"It is now {clock} ({phase}).", scene=scene, routine=True)
             acted.add(name)
             self._last_activity[name] = self._describe(result)
 
@@ -286,3 +318,25 @@ class Simulation:
                 for agent in self._registry.all()
             ],
         }
+
+
+def _traveler_brief(sketch: Traveler) -> str:
+    return (
+        f"A traveler is arriving in town. They come from {sketch.origin}, and they're {sketch.reason}. "
+        f"At a glance they seem {' and '.join(sketch.traits)}."
+    )
+
+
+def _fallback_identity(sketch: Traveler) -> Identity:
+    """The environment agent's own sketch, filled out into an Identity
+    without an LLM -- used by the mock backend and whenever generation
+    fails (see generate_traveler_identity).
+    """
+    return Identity(
+        name=sketch.name,
+        traits=list(sketch.traits),
+        backstory=f"A traveler from {sketch.origin}, {sketch.reason}.",
+        speech_style="plain and brief, like a stranger in town",
+        goals=[sketch.reason],
+        habits=["Wanders through town without lingering long"],
+    )

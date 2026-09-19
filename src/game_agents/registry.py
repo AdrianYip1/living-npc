@@ -58,6 +58,9 @@ class NPCRegistry:
         conversation_log_dir: str | Path | None = None,
         inventory_dir: str | Path | None = None,
     ) -> None:
+        # Exposed so anything generating content in the same world (e.g.
+        # traveler identities) uses the same backend as the NPCs.
+        self.llm = llm
         self._memory_dir = Path(memory_dir)
         # None means inventories aren't persisted -- every run starts from
         # each identity's starting_money / starting_items.

@@ -3,9 +3,10 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
-# Word pools for invent_traveler() below -- a deterministic stand-in for what
-# should eventually be an LLM call ("invent a traveler passing through
-# today"). Small and easy to hand-edit for now; not meant to be exhaustive.
+# Word pools for invent_traveler() below. The sketch they produce is only a
+# brief: the full identity is generated from it by an LLM elsewhere (see
+# game_agents/traveler_identity.py), with this sketch as the fallback.
+# Small and easy to hand-edit; not meant to be exhaustive.
 _FIRST_NAMES = ["Odell", "Brynn", "Tamsin", "Cael", "Rosalind", "Merrick", "Ysolde", "Doran"]
 _ORIGINS = ["a mountain pass to the north", "the coastal trade roads", "a caravan out of the east", "no town in particular"]
 _REASONS = [
@@ -33,10 +34,7 @@ class Traveler:
 
 
 def invent_traveler(rng: random.Random) -> Traveler:
-    """Rolls a traveler from the word pools above. Swap this body for an
-    LLM call later; callers only ever see "give me a traveler" in, a
-    Traveler out.
-    """
+    """Rolls a traveler sketch from the word pools above."""
     return Traveler(
         name=rng.choice(_FIRST_NAMES),
         origin=rng.choice(_ORIGINS),

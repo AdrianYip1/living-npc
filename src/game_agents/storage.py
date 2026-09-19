@@ -11,29 +11,36 @@ _IDENTITY_FIELDS = ("name", "traits", "backstory", "speech_style", "goals", "hom
 _COORD_FIELDS = ("home", "workplace")
 
 
+def identity_from_record(record: dict) -> Identity:
+    """One npcs.json entry -> Identity. Unknown keys raise (via Identity's
+    constructor), same as a typo in npcs.json would.
+    """
+    record = dict(record)
+    for coord_field in _COORD_FIELDS:
+        if coord_field in record:
+            record[coord_field] = tuple(record[coord_field])
+    return Identity(**record)
+
+
+def identity_to_record(identity: Identity) -> dict:
+    """Identity -> one npcs.json entry, JSON-ready."""
+    record = {field: getattr(identity, field) for field in _IDENTITY_FIELDS}
+    for coord_field in _COORD_FIELDS:
+        record[coord_field] = list(record[coord_field])
+    return record
+
+
 def load_identities(path: str | Path) -> list[Identity]:
     p = Path(path)
     if not p.exists():
         return []
-    records = json.loads(p.read_text(encoding="utf-8"))
-    identities = []
-    for record in records:
-        for coord_field in _COORD_FIELDS:
-            if coord_field in record:
-                record[coord_field] = tuple(record[coord_field])
-        identities.append(Identity(**record))
-    return identities
+    return [identity_from_record(record) for record in json.loads(p.read_text(encoding="utf-8"))]
 
 
 def save_identities(identities: list[Identity], path: str | Path) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    records = []
-    for identity in identities:
-        record = {field: getattr(identity, field) for field in _IDENTITY_FIELDS}
-        for coord_field in _COORD_FIELDS:
-            record[coord_field] = list(record[coord_field])
-        records.append(record)
+    records = [identity_to_record(identity) for identity in identities]
     p.write_text(json.dumps(records, indent=2), encoding="utf-8")
 
 
