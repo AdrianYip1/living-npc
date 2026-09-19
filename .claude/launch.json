@@ -10,6 +10,19 @@
       ],
       "cwd": "src",
       "port": 8765
+    },
+    {
+      "name": "mini-map-static",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8766",
+        "--bind",
+        "127.0.0.1"
+      ],
+      "cwd": "src/mini_map/static",
+      "port": 8766
     }
   ]
 }

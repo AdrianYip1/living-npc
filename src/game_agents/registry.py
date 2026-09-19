@@ -186,8 +186,9 @@ class NPCRegistry:
     # ------------------------------------------------------------------ #
     def add_traveler(self, identity: Identity, *, position: tuple[float, float], standing_context: str = "") -> Agent:
         """Brings a traveler into the world as a live Agent at `position`.
-        The name must not already be taken (resident or traveler) -- pick
-        one with unique_name() first.
+        Raises ValueError if the name is already taken (resident or
+        traveler, case-insensitively) -- checked under the same lock that
+        adds it, so two arrivals can't both claim one name.
         """
         name = identity.name
         tools = ToolRegistry()
@@ -224,15 +225,6 @@ class NPCRegistry:
             self._travelers.discard(name)
             del self._agents[name]
             return True
-
-    def unique_name(self, name: str) -> str:
-        """`name`, or `name` with a number appended if someone here already
-        has it (case-insensitively, the same way _resolve() matches).
-        """
-        candidate, n = name, 2
-        while self._resolve(candidate) is not None:
-            candidate, n = f"{name} {n}", n + 1
-        return candidate
 
     def save_all(self) -> None:
         for agent in self.residents():

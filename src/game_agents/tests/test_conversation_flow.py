@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from game_agents.agent import Agent
-from game_agents.conversation import ConversationHooks, run_conversation
+from game_agents.conversation import ConversationHooks, conversation_recap, run_conversation
 from game_agents.identity import Identity
 from game_agents.llm import ENDS_CONVERSATION_FIELD, SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
 from game_agents.registry import CONVERSATION_STARTED_PREFIX, NPCRegistry, conversation_happened
@@ -177,12 +177,15 @@ class SoakRegressionTests(unittest.TestCase):
             self.assertIn("move_to", offered)
             self.assertIn("initiate_conversation", [t["name"] for t in registry.get("Mara").tools.schemas()])
 
-    def _trader(self, name, script):
+    def _trader(self, name, script, seen=None):
         """An agent that plays `script` in order: a string is a line, a
-        dict is a tool call ({"name": ..., "arguments": ...})."""
+        dict is a tool call ({"name": ..., "arguments": ...}). Every system
+        prompt it gets is appended to `seen`, if given."""
 
         class _Script:
             def complete(self, *, system, messages, tools):
+                if seen is not None:
+                    seen.append(system)
                 step = script.pop(0) if script else "..."
                 if isinstance(step, dict):
                     return LLMResult(tool_call=ToolCall(**step))
@@ -233,6 +236,26 @@ class SoakRegressionTests(unittest.TestCase):
         transcript = run_conversation(yusef, finn, turns=8)
 
         self.assertEqual(len(transcript), 2)
+
+    def test_tool_calls_are_private_to_whoever_made_them(self):
+        # Finn checked his pack mid-conversation and Corwin saw the result
+        # in the shared transcript ("Says he has five fish right there").
+        sell = {"name": "sell_item", "arguments": {}}
+        yusef_saw, finn_saw = [], []
+        yusef = self._trader("Yusef", ["Three fish for six?", "Pleasure.", "Bye!"], yusef_saw)
+        finn = self._trader("Finn", ["Deal.", sell, "There you go.", "Take care."], finn_saw)
+
+        transcript = run_conversation(yusef, finn, turns=8)
+
+        self.assertTrue(any("You sold 3 x fish" in system for system in finn_saw[2:]))
+        after_sale = yusef_saw[2:]
+        self.assertTrue(after_sale)
+        for system in after_sale:
+            self.assertIn("Finn: There you go.", system)
+            self.assertNotIn("sell_item", system)
+            self.assertNotIn("18 coins", system)
+        self.assertNotIn("sell_item", conversation_recap(transcript, "Yusef"))
+        self.assertIn("(You: sell_item -- You sold 3 x fish", conversation_recap(transcript, "Finn"))
 
     def test_walking_to_someone_stops_in_front_of_them(self):
         self.assertEqual(keep_personal_space((12, -30), (40, -30), [(12, -30)]), (24, -30))

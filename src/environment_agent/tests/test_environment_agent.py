@@ -7,7 +7,7 @@ from unittest import mock
 from environment_agent.agent import EnvironmentAgent
 from environment_agent.temperature import MAX_TEMPERATURE, MIN_TEMPERATURE, next_temperature
 from environment_agent.time_of_day import TimeOfDay, format_clock, phase_for_minute
-from environment_agent.travelers import _FIRST_NAMES, _ORIGINS, _REASONS, _TRAITS, invent_traveler
+from environment_agent.travelers import _FIRST_NAMES, _ORIGINS, _REASONS, _TRAITS, invent_traveler, spare_names
 from environment_agent.weather import Weather, next_weather
 
 
@@ -37,6 +37,15 @@ class InventTravelerTests(unittest.TestCase):
     def test_traits_are_not_duplicated(self):
         traveler = invent_traveler(random.Random(7))
         self.assertEqual(len(set(traveler.traits)), len(traveler.traits))
+
+    def test_spare_names_match_the_gender_and_are_unique(self):
+        for gender in ("male", "female"):
+            names = spare_names(gender)
+            self.assertTrue(names)
+            self.assertTrue(all((name, gender) in _FIRST_NAMES for name in names))
+        pool = [name.lower() for name, _ in _FIRST_NAMES]
+        self.assertEqual(len(pool), len(set(pool)))
+        self.assertEqual(len(spare_names("")), len(_FIRST_NAMES))  # unknown gender: everyone
 
 
 class NextTemperatureTests(unittest.TestCase):

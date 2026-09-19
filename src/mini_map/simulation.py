@@ -9,7 +9,9 @@ from __future__ import annotations
 import logging
 import math
 import random
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -18,16 +20,23 @@ from typing import Any, Callable
 
 from environment_agent.agent import EnvironmentAgent
 from environment_agent.time_of_day import MINUTES_PER_DAY
-from environment_agent.travelers import Traveler
+from environment_agent.travelers import Traveler, spare_names
 
 from game_agents.agent import Agent, Scene, TurnResult
 from game_agents.conversation import ConversationHooks, ConversationTurn
-from game_agents.conversation_export import PLAYER_PARTICIPANT, ConversationExporter, npc_participant, npc_state_entry
+from game_agents.conversation_export import (
+    PLAYER_PARTICIPANT,
+    ConversationExporter,
+    npc_participant,
+    npc_state_entry,
+    time_state,
+)
 from game_agents.identity import Identity
 from game_agents.llm import SPEAK_TOOL_NAME
 from game_agents.registry import NPCRegistry, conversation_happened
 from game_agents.storage import identity_to_record
 from game_agents.traveler_identity import generate_traveler_identity
+from game_agents.traveler_names import UsedTravelerNames, names_in_memories
 from game_agents.world import INTERACTION_RANGE, MAP_MAX, MAP_MIN, distance, render_surroundings
 
 from .traveler_purpose import BUY, TravelerPurpose, pick_purpose
@@ -190,8 +199,13 @@ class Simulation:
         line_pacing: bool = True,
         exporter: ConversationExporter | None = None,
         backend: str = "",
+        used_names_path: str | Path | None = None,
     ) -> None:
         self._registry = registry
+        # Every name a traveler has gone by, this run or any earlier one the
+        # residents remember -- new travelers stay off them (see
+        # _admit_traveler). Saved to used_names_path, if given.
+        self._used_names = UsedTravelerNames(used_names_path, remembered=names_in_memories(registry.residents()))
         # Which LLM backend is driving the NPCs (bootstrap's GAME_AGENTS_LLM
         # name) -- only reported to the page, so a mock run is obvious.
         self._backend = backend
@@ -381,23 +395,49 @@ class Simulation:
     # ------------------------------------------------------------------ #
     # travelers
     # ------------------------------------------------------------------ #
+    def _add_traveler_under_free_name(
+        self,
+        identity: Identity,
+        spares: list[str],
+        used_names: list[str],
+        **kwargs: Any,
+    ) -> tuple[Identity, Agent] | None:
+        """Adds the traveler, renamed to one of `spares` if its own name is
+        taken. The fallback identity skips generation's taken-name check and
+        two generations can race to one name, so add_traveler() -- which
+        checks under its lock -- has the final say, and a refusal just moves
+        on to the next name. A name some earlier traveler went by
+        (`used_names`, least recently used first) is used only once nothing
+        else is free -- it would read as the same person back again -- and
+        then the one used longest ago. Never numbered ("Mara 2"); None if
+        every candidate is in use.
+        """
+        used = {name.lower(): i for i, name in enumerate(used_names)}
+        candidates = list(dict.fromkeys([identity.name, *spares]))
+        # Stable: fresh names first in their given order, then used ones oldest first.
+        candidates.sort(key=lambda name: -1 if name.lower() not in used else used[name.lower()])
+        for name in candidates:
+            renamed = _renamed(identity, name)
+            try:
+                return renamed, self._registry.add_traveler(renamed, **kwargs)
+            except ValueError:
+                continue
+        return None
+
     def _admit_traveler(self, sketch: Traveler, clock: str) -> None:
         """Worker thread: generate the identity, then bring the traveler
         into the world and give it its first turn.
         """
         with self._traveler_lock:
-            recent_names = [arrival["identity"]["name"] for arrival in self._traveler_arrivals]
             purpose = pick_purpose(self._rng, self._registry.places, self._registry.residents())
             fallback_money = self._rng.randint(*self.TRAVELER_FALLBACK_MONEY)
+        used_names = self._used_names.names()
         identity = generate_traveler_identity(
             self._registry.llm,
             _traveler_brief(sketch, purpose),
             fallback=_fallback_identity(sketch, purpose, money=fallback_money),
-            taken_names=[agent.identity.name for agent in self._registry.all()] + recent_names,
+            taken_names=list(dict.fromkeys([agent.identity.name for agent in self._registry.all()] + used_names)),
         )
-        # The fallback skips the taken-name check, and two generations can
-        # race to the same name -- the registry has the final say.
-        identity.name = self._registry.unique_name(identity.name)
         if purpose.kind == BUY:
             # Came to buy something: make sure they can pay for it.
             identity.starting_money = max(identity.starting_money, self.TRAVELER_BUYER_MIN_MONEY)
@@ -407,7 +447,17 @@ class Simulation:
             f"Your exit point: ({exit_point[0]}, {exit_point[1]}), on the edge of the map. "
             "Reaching it means leaving town.\n" + purpose.standing_context()
         )
-        agent = self._registry.add_traveler(identity, position=entry, standing_context=standing_context)
+        with self._traveler_lock:
+            spares = spare_names(identity.gender)
+            self._rng.shuffle(spares)
+        added = self._add_traveler_under_free_name(
+            identity, spares, used_names, position=entry, standing_context=standing_context
+        )
+        if added is None:
+            log.warning("traveler %r not admitted: every spare %s name is in use", identity.name, identity.gender)
+            return
+        identity, agent = added
+        self._used_names.record(identity.name)
         now = self._environment.elapsed_minutes
         self._traveler_state[identity.name] = _TravelerState(
             exit_point=exit_point,
@@ -812,7 +862,8 @@ class Simulation:
             self._exporter.point_at(best[1], best[2])
 
     def export_npc_state(self) -> None:
-        """Sends every NPC's position and facing to the renderer. Slots are
+        """Sends every NPC's position and facing, plus the in-game time, to
+        the renderer -- the time even while paused (with a rate of 0). Slots are
         a PLACEHOLDER until settled with the renderer side: residents first
         in registry order, then travelers in arrival order -- the renderer
         drops any slot it has no body for, so residents get bodies first.
@@ -828,7 +879,9 @@ class Simulation:
             if math.hypot(*agent.velocity) > 1.0:
                 self._facing[name] = agent.velocity
             entries.append(npc_state_entry(slot, agent.position, self._facing.get(name, (0.0, 1.0))))
-        self._exporter.write_npc_state(entries)
+        rate = 0.0 if self.is_paused() else self._game_minutes_per_real_minute() / 60.0
+        time_now = time_state(self._environment.minute_of_day, self._environment.time_of_day.value, rate)
+        self._exporter.write_npc_state(time_now, entries)
 
     def _refuse_conversation(self, initiator: str, target: str) -> str | None:
         talked_at = self._talked_at.get(frozenset((initiator, target)))
@@ -1112,6 +1165,22 @@ def _traveler_brief(sketch: Traveler, purpose: TravelerPurpose) -> str:
     return (
         f"A traveler is arriving in town. They come from {sketch.origin}. {purpose.brief()} "
         f"At a glance they seem {' and '.join(sketch.traits)}."
+    )
+
+
+def _renamed(identity: Identity, name: str) -> Identity:
+    """A copy of `identity` called `name`, with the old name swapped out of
+    its text too -- a generated backstory may name its traveler.
+    """
+    if name == identity.name:
+        return identity
+    old = re.compile(rf"\b{re.escape(identity.name)}\b")
+    return replace(
+        identity,
+        name=name,
+        backstory=old.sub(name, identity.backstory),
+        goals=[old.sub(name, goal) for goal in identity.goals],
+        habits=[old.sub(name, habit) for habit in identity.habits],
     )
 
 

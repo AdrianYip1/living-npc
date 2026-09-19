@@ -212,7 +212,11 @@ class TravelerArrivalTests(unittest.TestCase):
             sim = Simulation(registry, environment)
             for _ in range(5):
                 sim._advance_environment()
-            sim.wait_for_pending(timeout=5)
+                sim.wait_for_pending(timeout=5)
+                # Gone by the next day, as in play -- 50 at once would outnumber
+                # the traveler name pool.
+                for traveler in registry.travelers():
+                    registry.remove_traveler(traveler.identity.name)
 
             ids = [a["id"] for a in sim.state()["traveler_arrivals"]]
             self.assertEqual(len(ids), Simulation.RECENT_TRAVELERS)

@@ -1,0 +1,42 @@
+[
+  {
+    "speaker": "Mara",
+    "listener": "Finn",
+    "stimulus": "You've walked up to Finn. Say your opening line.",
+    "utterance": "Back again already? Net still full of holes, or did the twine actually hold?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Back again already? Net still full of holes, or did the twine actually hold?\"",
+    "utterance": "Ha, the twine's holdin' for now, patched 'er up good enough to limp along! But it's still more hole than net if I'm honest. Just poppin' by to say mornin', not lookin' for more chores for ya, Mara. Hammer's already ringin' out there, eh? Busy day ahead?",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Ha, the twine's holdin' for now, patched 'er up good enough to limp along! But it's still more hole than net if I'm honest. Just poppin' by to say mornin', not lookin' for more chores for ya, Mara. Hammer's already ringin' out there, eh? Busy day ahead?\"",
+    "utterance": "Aye, mayor's gate hinges won't forge themselves. Full day ahead, no rest for it. You just keep that twine holding till you can get a proper net.",
+    "action": null,
+    "ends_conversation": false
+  },
+  {
+    "speaker": "Finn",
+    "listener": "Mara",
+    "stimulus": "Mara says: \"Aye, mayor's gate hinges won't forge themselves. Full day ahead, no rest for it. You just keep that twine holding till you can get a proper net.\"",
+    "utterance": "Ha, will do, Mara! Alright, I'll let ya get to them hinges before the mayor comes bangin' on your door. Good luck with the forge today!",
+    "action": null,
+    "ends_conversation": true
+  },
+  {
+    "speaker": "Mara",
+    "listener": "Finn",
+    "stimulus": "Finn says: \"Ha, will do, Mara! Alright, I'll let ya get to them hinges before the mayor comes bangin' on your door. Good luck with the forge today!\"",
+    "utterance": "Off I go, then. Mind the tides, Finn.",
+    "action": null,
+    "ends_conversation": true
+  }
+]

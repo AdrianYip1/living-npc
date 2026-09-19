@@ -16,6 +16,22 @@ _FIRST_NAMES = [
     ("Merrick", "male"),
     ("Ysolde", "female"),
     ("Doran", "male"),
+    ("Anselm", "male"),
+    ("Isolde", "female"),
+    ("Corwin", "male"),
+    ("Maren", "female"),
+    ("Aldric", "male"),
+    ("Linnea", "female"),
+    ("Tobin", "male"),
+    ("Sabine", "female"),
+    ("Halvard", "male"),
+    ("Wynne", "female"),
+    ("Evander", "male"),
+    ("Petra", "female"),
+    ("Lucan", "male"),
+    ("Odette", "female"),
+    ("Garrick", "male"),
+    ("Elspeth", "female"),
 ]
 _ORIGINS = ["a mountain pass to the north", "the coastal trade roads", "a caravan out of the east", "no town in particular"]
 _REASONS = [
@@ -41,6 +57,13 @@ class Traveler:
     reason: str
     traits: list[str] = field(default_factory=list)
     gender: str = ""
+
+
+def spare_names(gender: str) -> list[str]:
+    """Every pool name of that gender (all of them for an unknown one) --
+    for renaming a traveler whose name turns out to be taken.
+    """
+    return [name for name, g in _FIRST_NAMES if g == gender] or [name for name, _ in _FIRST_NAMES]
 
 
 def invent_traveler(rng: random.Random) -> Traveler:

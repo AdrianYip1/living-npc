@@ -55,13 +55,11 @@ class TravelerLifecycleTests(unittest.TestCase):
             names = {schema["name"] for schema in agent.tools.schemas()}
             self.assertEqual(names, {"move_to", "initiate_conversation", "buy_item", "wait"})
 
-    def test_duplicate_name_is_rejected_and_unique_name_avoids_it(self):
+    def test_duplicate_name_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = _registry(tmp)
             with self.assertRaises(ValueError):
                 registry.add_traveler(_identity("mara"), position=(0, 0))
-            self.assertEqual(registry.unique_name("Mara"), "Mara 2")
-            self.assertEqual(registry.unique_name("Wren"), "Wren")
 
     def test_remove_traveler(self):
         with tempfile.TemporaryDirectory() as tmp:

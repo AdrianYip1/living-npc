@@ -51,6 +51,23 @@ const TRAVELER_COLOR = "#ff9800";
 const TRAVELER_FADE_SECONDS = 1.2;
 const GAME_BOUND = 100; // matches game_agents/world.py's MAP_MIN/MAX
 const WORLD_SCALE = MAP_HALF / GAME_BOUND; // backend coord -> canvas world unit
+// Static footprints of the 3D scene (models/scene_opt/background3.gltf), in
+// backend coords: the hut's outline (convex hull of its mesh, simplified)
+// and the island trees (the two island_tree_01s and the island_tree_02; the
+// scene's other trees are left off on purpose) -- trunk just above the roots,
+// canopy circle over the leaves' centroid, radius taking in 90% of the
+// leaves, i.e. about where the canopy visibly ends. Measured once from the
+// gltf; redo if the scene changes.
+const HUT_OUTLINE = [
+  [-94, -92], [-87, -99], [-54, -106], [-18, -65],
+  [-33, -38], [-40, -32], [-67, -21], [-104, -62],
+];
+const TREES = [
+  { trunk: [-88, -96], canopy: [-89, -87], radius: 44 }, // island_tree_01
+  { trunk: [82, -89], canopy: [83, -81], radius: 36 }, // island_tree_01
+  { trunk: [86, -68], canopy: [96, -59], radius: 20 }, // island_tree_02
+];
+const TRUNK_RADIUS = 3;
 const STATE_POLL_MS = 200;
 // Client-side smoothing of server-driven NPC positions (see applyState).
 const NPC_SNAP_DISTANCE = 60; // world units; bigger gaps than this just jump
@@ -663,6 +680,38 @@ function worldToScreen(x, y) {
   };
 }
 
+// The hut and trees, under everything else (see HUT_OUTLINE).
+function drawScenery() {
+  ctx.save();
+  ctx.lineWidth = 2 / view.zoom;
+
+  ctx.beginPath();
+  HUT_OUTLINE.forEach(([x, y], i) => {
+    if (i === 0) ctx.moveTo(x * WORLD_SCALE, y * WORLD_SCALE);
+    else ctx.lineTo(x * WORLD_SCALE, y * WORLD_SCALE);
+  });
+  ctx.closePath();
+  ctx.fillStyle = "rgba(161, 122, 74, 0.22)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(161, 122, 74, 0.6)";
+  ctx.stroke();
+
+  for (const tree of TREES) {
+    ctx.beginPath();
+    ctx.arc(tree.canopy[0] * WORLD_SCALE, tree.canopy[1] * WORLD_SCALE, tree.radius * WORLD_SCALE, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(76, 140, 74, 0.16)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(76, 140, 74, 0.45)";
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(tree.trunk[0] * WORLD_SCALE, tree.trunk[1] * WORLD_SCALE, TRUNK_RADIUS * WORLD_SCALE, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(110, 78, 48, 0.85)";
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawWorld(dt) {
   const width = viewWidth;
   const height = viewHeight;
@@ -702,6 +751,7 @@ function drawWorld(dt) {
     ctx.stroke();
   }
 
+  drawScenery();
   drawConversationLinks();
 
   for (const npc of npcs) {

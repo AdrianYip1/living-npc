@@ -6,7 +6,7 @@
     "backstory": "Runs the town's only blacksmith shop, inherited from her mother.",
     "speech_style": "short sentences, dry humor",
     "goals": ["finish the order for the mayor's gate hinges"],
-    "home": [-40, 15],
+    "home": [-30, -21],
     "workplace": [12, -30],
     "habits": [
       "Leaves home for the forge shortly after sunrise",
@@ -23,7 +23,7 @@
     "backstory": "The town's fisherman, spends more time talking to travelers than fishing.",
     "speech_style": "friendly and casual, dockside slang",
     "goals": ["find someone willing to trade for a spare net"],
-    "home": [55, -20],
+    "home": [-21, -30],
     "workplace": [70, 45],
     "habits": [
       "Walks down to the docks early to catch the morning tide",

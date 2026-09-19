@@ -24,6 +24,8 @@ INSTRUCTIONS_PATH = DATA_DIR / "instructions.json"
 CONVERSATION_LOG_DIR = Path(os.environ.get("CONVERSATION_LOG_DIR", DATA_DIR / "conversation_log"))
 INVENTORY_DIR = DATA_DIR / "inventory"
 WORLD_PATH = DATA_DIR / "world.json"
+# Every name a traveler has gone by, across runs (see traveler_names.py).
+TRAVELER_NAMES_PATH = DATA_DIR / "traveler_names.json"
 CONVERSATION_MAX_TURNS = 15
 
 _BACKENDS: dict[str, type[LLMClient]] = {
