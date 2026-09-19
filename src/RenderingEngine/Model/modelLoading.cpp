@@ -98,6 +98,8 @@ bool HTN::Loader::loadModel(const std::string& modelPath, fModel& out, Skeleton&
 		skeleton.data = data;
 		skeleton.skin = data->skins_count ? &data->skins[0] : nullptr;
 		skeleton.anim = data->animations_count ? &data->animations[0] : nullptr;
+		if (skeleton.anim)
+			skeleton.anims[static_cast<u32>(AnimState::WALK)] = skeleton.anim;
 	}
 
 	return true;
@@ -352,14 +354,65 @@ void HTN::Loader::buildInstancedMesh(cgltf_mesh* mesh, fModel& out,
 }
 
 HTN::Skeleton::~Skeleton() {
+	for (auto* d : extraData) cgltf_free(d);
 	if (data) cgltf_free(data);
 }
 
-HTN::f32 HTN::Skeleton::animLength() const {
-	if (!anim) return 0.0f;
+void HTN::Skeleton::buildNodeMap(cgltf_node* node, std::unordered_map<std::string, cgltf_node*>& map) {
+	if (node->name) map[node->name] = node;
+	for (cgltf_size i = 0; i < node->children_count; i++)
+		buildNodeMap(node->children[i], map);
+}
+
+void HTN::Skeleton::loadAnimation(AnimState slot, const std::string& gltfPath,
+								   const std::vector<std::string>& excludeJoints) {
+	if (!data || !skin) return;
+
+	std::unordered_map<std::string, cgltf_node*> nodeMap;
+	for (cgltf_size i = 0; i < data->nodes_count; i++) {
+		if (data->nodes[i].name)
+			nodeMap[data->nodes[i].name] = &data->nodes[i];
+	}
+
+	cgltf_options options = {};
+	cgltf_data* extra = nullptr;
+	if (cgltf_parse_file(&options, gltfPath.c_str(), &extra) != cgltf_result_success) return;
+	if (cgltf_load_buffers(&options, extra, gltfPath.c_str()) != cgltf_result_success) {
+		cgltf_free(extra);
+		return;
+	}
+
+	if (extra->animations_count == 0) { cgltf_free(extra); return; }
+
+	cgltf_animation* a = &extra->animations[0];
+	for (cgltf_size c = 0; c < a->channels_count; c++) {
+		cgltf_node* src = a->channels[c].target_node;
+		if (src && src->name) {
+			std::string name(src->name);
+			bool excluded = false;
+			for (const auto& ex : excludeJoints) {
+				if (name.find(ex) != std::string::npos) { excluded = true; break; }
+			}
+			if (excluded) {
+				a->channels[c].target_node = nullptr;
+				continue;
+			}
+			auto it = nodeMap.find(name);
+			if (it != nodeMap.end())
+				a->channels[c].target_node = it->second;
+		}
+	}
+
+	extraData.push_back(extra);
+	anims[static_cast<u32>(slot)] = a;
+}
+
+HTN::f32 HTN::Skeleton::animLength(AnimState slot) const {
+	cgltf_animation* a = anims[static_cast<u32>(slot)];
+	if (!a) return 0.0f;
 	f32 maxT = 0.0f;
-	for (cgltf_size c = 0; c < anim->channels_count; c++) {
-		cgltf_accessor* in = anim->channels[c].sampler->input;
+	for (cgltf_size c = 0; c < a->channels_count; c++) {
+		cgltf_accessor* in = a->channels[c].sampler->input;
 		f32 last;
 		cgltf_accessor_read_float(in, in->count - 1, &last, 1);
 		if (last > maxT) maxT = last;
@@ -367,12 +420,14 @@ HTN::f32 HTN::Skeleton::animLength() const {
 	return maxT;
 }
 
-void HTN::Skeleton::sample(f32 t) {
-	if (!anim) return;
-	for (cgltf_size c = 0; c < anim->channels_count; c++) {
-		cgltf_animation_channel* ch = &anim->channels[c];
+void HTN::Skeleton::sample(AnimState slot, f32 t) {
+	cgltf_animation* a = anims[static_cast<u32>(slot)];
+	if (!a) return;
+	for (cgltf_size c = 0; c < a->channels_count; c++) {
+		cgltf_animation_channel* ch = &a->channels[c];
 		cgltf_animation_sampler* s = ch->sampler;
 		cgltf_node* node = ch->target_node;
+		if (!node) continue;
 
 		int n = (int)s->input->count;
 		int i = 0; f32 t0 = 0.0f, t1 = 0.0f;
@@ -406,13 +461,16 @@ void HTN::Skeleton::sample(f32 t) {
 	}
 }
 
-std::vector<enginemath::Mat4> HTN::Skeleton::computePalette(f32 elapsedSeconds, const std::vector<enginemath::Mat4>& inverseBind) {
+std::vector<enginemath::Mat4> HTN::Skeleton::computePalette(AnimState slot, f32 elapsedSeconds, const std::vector<enginemath::Mat4>& inverseBind) {
 	std::vector<enginemath::Mat4> palette(MAX_JOINTS, enginemath::Mat4::identity());
-	if (!skin || !anim) return palette;
+	if (!skin) return palette;
 
-	f32 len = animLength();
+	cgltf_animation* a = anims[static_cast<u32>(slot)];
+	if (!a) return palette;
+
+	f32 len = animLength(slot);
 	f32 t = len > 0.0f ? std::fmod(elapsedSeconds, len) : 0.0f;
-	sample(t);
+	sample(slot, t);
 
 	for (cgltf_size j = 0; j < skin->joints_count && j < MAX_JOINTS && j < inverseBind.size(); j++) {
 		f32 world[16];

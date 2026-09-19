@@ -18,6 +18,8 @@ struct cgltf_animation;
 
 namespace HTN {
 
+	enum class AnimState : u32 { IDLE = 0, WALK, TALK, COUNT };
+
 	class Skeleton {
 	public:
 		Skeleton() = default;
@@ -25,13 +27,21 @@ namespace HTN {
 		Skeleton(const Skeleton&) = delete;
 		Skeleton& operator=(const Skeleton&) = delete;
 
-		f32 animLength() const;
-		void sample(f32 t);
-		std::vector<enginemath::Mat4> computePalette(f32 elapsedSeconds, const std::vector<enginemath::Mat4>& inverseBind);
+		void loadAnimation(AnimState slot, const std::string& gltfPath,
+						   const std::vector<std::string>& excludeJoints = {});
+		f32 animLength(AnimState slot) const;
+		void sample(AnimState slot, f32 t);
+		std::vector<enginemath::Mat4> computePalette(AnimState slot, f32 elapsedSeconds, const std::vector<enginemath::Mat4>& inverseBind);
 
 		cgltf_data* data = nullptr;
 		cgltf_skin* skin = nullptr;
 		cgltf_animation* anim = nullptr;
+
+	private:
+		friend class Loader;
+		std::vector<cgltf_data*> extraData;
+		cgltf_animation* anims[static_cast<u32>(AnimState::COUNT)] = {};
+		void buildNodeMap(cgltf_node* node, std::unordered_map<std::string, cgltf_node*>& map);
 	};
 
 	class Loader {
