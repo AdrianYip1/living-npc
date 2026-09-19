@@ -9,3 +9,10 @@ external/speechsdk/
 models/scene_opt/
 models/skybox/
 .env
+.venv/
+__pycache__/
+src/game_agents/data/conversation_log/active.json
+src/game_agents/data/conversation_log/npc_state.json
+src/game_agents/data/conversation_log/spoken.json
+src/game_agents/data/conversation_log/bounds.json
+src/game_agents/data/conversation_log/conv_*.jsonl
