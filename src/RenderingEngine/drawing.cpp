@@ -1,4 +1,5 @@
 #include "drawing.hpp"
+#include "renderer.hpp"
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 
@@ -59,12 +60,56 @@ void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapch
 										const std::vector<enginemath::Mat4>& npcTransforms,
 										Model* sceneModel, Pipeline* scenePipeline,
 										Pipeline* skyboxPipeline,
-										const std::vector<VkDescriptorSet>& skyboxSets) {
+										const std::vector<VkDescriptorSet>& skyboxSets,
+										const ShadowPass* shadow) {
 	VkCommandBufferBeginInfo beginInfo{};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
 	if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
 		throw std::runtime_error("ERROR: Failed to begin recording command buffer");
+	}
+
+	if (shadow && shadow->renderPass != VK_NULL_HANDLE) {
+		VkRenderPassBeginInfo shadowBegin{};
+		shadowBegin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		shadowBegin.renderPass = shadow->renderPass;
+		shadowBegin.framebuffer = shadow->framebuffer;
+		shadowBegin.renderArea.extent = { shadow->mapSize, shadow->mapSize };
+		shadowBegin.renderArea.offset = { 0, 0 };
+
+		VkClearValue clearDepth{};
+		clearDepth.depthStencil = { 1.0f, 0 };
+		shadowBegin.clearValueCount = 1;
+		shadowBegin.pClearValues = &clearDepth;
+
+		vkCmdBeginRenderPass(commandBuffer, &shadowBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+		VkViewport shadowViewport{};
+		shadowViewport.width = static_cast<f32>(shadow->mapSize);
+		shadowViewport.height = static_cast<f32>(shadow->mapSize);
+		shadowViewport.minDepth = 0.0f;
+		shadowViewport.maxDepth = 1.0f;
+		vkCmdSetViewport(commandBuffer, 0, 1, &shadowViewport);
+
+		VkRect2D shadowScissor{};
+		shadowScissor.extent = { shadow->mapSize, shadow->mapSize };
+		vkCmdSetScissor(commandBuffer, 0, 1, &shadowScissor);
+
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow->pipeline);
+
+		if (sceneModel) {
+			sceneModel->bind(commandBuffer);
+			sceneModel->draw(commandBuffer, shadow->pipelineLayout, materialSets, currentFrame,
+							 enginemath::Mat4::identity(), 0);
+		}
+
+		model.bind(commandBuffer);
+		for (u32 h = 0; h < static_cast<u32>(npcTransforms.size()); h++) {
+			model.draw(commandBuffer, shadow->pipelineLayout, materialSets, currentFrame,
+					   npcTransforms[h], h * MAX_WEIGHTS, h * MAX_JOINTS);
+		}
+
+		vkCmdEndRenderPass(commandBuffer);
 	}
 
 	VkRenderPassBeginInfo renderpassBeginInfo{};

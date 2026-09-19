@@ -128,7 +128,7 @@ def sanitize_for_speech(text: str) -> str:
     return text.strip()
 
 
-def npc_state_entry(slot: int, position: tuple[float, float], facing: tuple[float, float]) -> dict[str, Any]:
+def npc_state_entry(slot: int, position: tuple[float, float], facing: tuple[float, float], name: str = "") -> dict[str, Any]:
     """One npc_state.json entry: a minimap position and the direction the
     NPC last moved in, converted to the renderer's terms (see the module
     docstring). Rounded so jitter too small to see doesn't rewrite the file.
@@ -136,6 +136,7 @@ def npc_state_entry(slot: int, position: tuple[float, float], facing: tuple[floa
     span = MAP_MAX - MAP_MIN
     return {
         "slot": slot,
+        "name": name,
         "x": round(min(1.0, max(0.0, (position[0] - MAP_MIN) / span)), 4),
         "z": round(min(1.0, max(0.0, (position[1] - MAP_MIN) / span)), 4),
         "rot": round(math.atan2(facing[0], facing[1]), 3),
