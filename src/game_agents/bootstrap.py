@@ -24,6 +24,10 @@ INSTRUCTIONS_PATH = DATA_DIR / "instructions.json"
 CONVERSATION_LOG_DIR = Path(os.environ.get("CONVERSATION_LOG_DIR", DATA_DIR / "conversation_log"))
 INVENTORY_DIR = DATA_DIR / "inventory"
 WORLD_PATH = DATA_DIR / "world.json"
+# Every name a traveler has gone by, across runs (see traveler_names.py).
+TRAVELER_NAMES_PATH = DATA_DIR / "traveler_names.json"
+# What each resident knows the player as (see NPCRegistry).
+PLAYER_NAMES_PATH = DATA_DIR / "player_names.json"
 CONVERSATION_MAX_TURNS = 15
 
 _BACKENDS: dict[str, type[LLMClient]] = {
@@ -56,6 +60,7 @@ def build_registry() -> tuple[NPCRegistry, str]:
             conversation_log_dir=CONVERSATION_LOG_DIR,
             inventory_dir=INVENTORY_DIR,
             world_path=WORLD_PATH,
+            player_names_path=PLAYER_NAMES_PATH,
         ),
         backend,
     )

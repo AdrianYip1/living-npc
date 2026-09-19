@@ -21,20 +21,24 @@ def distance(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 
 # How far (map units) an NPC can see other people -- what goes in the
-# "who's around" block of its prompt (see render_surroundings()). Wider than
-# INTERACTION_RANGE, so there's someone to walk over to, not only someone
-# already close enough to talk to.
-AWARENESS_RANGE = 40
+# "who's around" block of its prompt (see render_surroundings()). The town is
+# small enough to take in at a glance, so: everyone.
+AWARENESS_RANGE = math.inf
 
 # The two labeled lines render_surroundings() writes. Exposed so anything
 # reading the prompt back (e.g. tests) matches the same format.
 IN_REACH_LABEL = "Close enough to talk to"
-IN_VIEW_LABEL = "Further off, but in view"
+IN_VIEW_LABEL = "Further off"
 BUSY_MARK = " (busy talking)"
 
 
-def render_surroundings(me: tuple[float, float], others: list[tuple[str, tuple[float, float], bool]]) -> str:
-    """Who else is within AWARENESS_RANGE of `me`, as a prompt block: one
+def render_surroundings(
+    me: tuple[float, float],
+    others: list[tuple[str, tuple[float, float], bool]],
+    *,
+    within: float = AWARENESS_RANGE,
+) -> str:
+    """Who else is within `within` of `me`, as a prompt block: one
     line for people within INTERACTION_RANGE (anyone you could start a
     conversation with right now) and one for the rest. `others` is
     (name, position, busy) for everyone else on the map. Empty string when
@@ -43,7 +47,7 @@ def render_surroundings(me: tuple[float, float], others: list[tuple[str, tuple[f
     in_reach, in_view = [], []
     for name, position, busy in sorted(others, key=lambda other: distance(me, other[1])):
         gap = distance(me, position)
-        if gap > AWARENESS_RANGE:
+        if gap > within:
             continue
         entry = f"{name} at ({position[0]:.0f}, {position[1]:.0f})" + (BUSY_MARK if busy else "")
         (in_reach if gap <= INTERACTION_RANGE else in_view).append(entry)
@@ -56,7 +60,7 @@ def render_surroundings(me: tuple[float, float], others: list[tuple[str, tuple[f
 
 
 # How close (map units) one NPC stops to another: a little more than an
-# icon's width on the mini-map (NPC_RADIUS 32px / WORLD_SCALE 6, doubled,
+# icon's width on the mini-map (NPC_RADIUS 24px / WORLD_SCALE 6, doubled,
 # in mini_map/static/app.js), so neighbors never draw on top of each other,
 # yet still inside INTERACTION_RANGE -- walking up to someone gets you
 # close enough to talk.
@@ -98,11 +102,11 @@ def keep_personal_space(
     return max(candidates, key=room)
 
 
-# NPC walking physics, in map units -- the player's own MAX_SPEED / ACCEL /
-# DECEL from mini_map/static/app.js (260 / 900 / 1400, in canvas units),
-# divided by its WORLD_SCALE of 6 canvas units per map unit, so NPCs move
-# exactly like the player does. Keep the two in sync.
-NPC_MAX_SPEED = 260 / 6  # map units/sec
+# NPC walking physics, in map units -- NPC_MAX_SPEED / ACCEL / DECEL from
+# mini_map/static/app.js (130 / 900 / 1400, in canvas units), divided by its
+# WORLD_SCALE of 6 canvas units per map unit. NPCs accelerate and brake like
+# the player but walk slower. Keep the two in sync.
+NPC_MAX_SPEED = 130 / 6  # map units/sec
 NPC_ACCEL = 900 / 6  # map units/sec^2 while speeding up / turning
 NPC_DECEL = 1400 / 6  # map units/sec^2 while braking
 # While an NPC is deciding what to do mid-walk (see NPCRegistry.

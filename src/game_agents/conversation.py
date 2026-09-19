@@ -9,9 +9,10 @@ from .agent import Agent, Scene
 
 
 # Actions that don't end a conversation when taken mid-exchange: closing a
-# deal just agreed on out loud, or checking your pack to answer a question.
-# Anything else (walking off, waiting) still means the conversation's over.
-IN_CONVERSATION_ACTIONS = frozenset({"buy_item", "sell_item", "check_inventory"})
+# deal just agreed on out loud. Anything else (walking off, waiting) still
+# means the conversation's over. Look-ups like check_inventory never get
+# here -- Agent.respond() hands their result back within the same turn.
+IN_CONVERSATION_ACTIONS = frozenset({"buy_item", "sell_item"})
 
 
 @dataclass
@@ -41,7 +42,8 @@ class ConversationHooks:
       Returns False if it couldn't be scheduled.
     - on_start: called with (initiator, target) once the pair is claimed,
       just before the first turn.
-    - scene: the current time/weather, as each turn starts.
+    - scene: the current time/weather (and who's around), given the
+      agent whose turn is starting.
     - on_turn: called with each turn as soon as it's decided -- and may
       block, which is how the simulation paces lines out for reading.
     - on_end: called with the whole transcript, before both sides are
@@ -49,14 +51,20 @@ class ConversationHooks:
     - refuse: asked before an exchange starts, with (initiator, target);
       a reason string turns the attempt down, handed back to the initiator
       as its tool result. None lets it go ahead.
+    - invite_player: an NPC (by name) starting a conversation with the
+      player, already checked to be in range. Claims the NPC and opens the
+      conversation on the player's side, returning None -- or a reason it
+      couldn't (the player's already talking to someone), handed back as
+      the tool result. Unset: nobody can start one.
     """
 
     run: Callable[[Callable[[], None]], bool] | None = None
     on_start: Callable[[str, str], None] | None = None
-    scene: Callable[[], Scene] | None = None
+    scene: Callable[[Agent], Scene] | None = None
     on_turn: Callable[[ConversationTurn], None] | None = None
     on_end: Callable[[list[ConversationTurn]], None] | None = None
     refuse: Callable[[str, str], str | None] | None = None
+    invite_player: Callable[[str], str | None] | None = None
 
 
 def run_conversation(
@@ -64,7 +72,7 @@ def run_conversation(
     target: Agent,
     *,
     turns: int = 4,
-    scene: Callable[[], Scene] | None = None,
+    scene: Callable[[Agent], Scene] | None = None,
     on_turn: Callable[[ConversationTurn], None] | None = None,
 ) -> list[ConversationTurn]:
     """Alternates turns between two agents, the initiator opening. Each
@@ -78,8 +86,9 @@ def run_conversation(
     (there's no coherent line left to hand the other side), or after
     `turns` turns, whichever comes first. The exception is an action that
     belongs in a conversation (IN_CONVERSATION_ACTIONS, e.g. closing a
-    trade just agreed on): that's noted in the transcript and the same side
-    gets to follow it up with a line.
+    trade just agreed on): the same side gets to follow it up with a line.
+    Tool calls are private -- only the side that made one sees it (and its
+    result) in the transcript; the other side only hears what's said.
 
     Caller is responsible for claiming/releasing busy state around this;
     this function only runs the turns. It never calls itself or lets either
@@ -88,12 +97,14 @@ def run_conversation(
     (a side already claimed busy can't successfully claim a new pair).
     """
     transcript: list[ConversationTurn] = []
-    lines: list[str] = []
+    # (who can see it, line): None for what's said aloud, a name for that
+    # side's own tool calls.
+    lines: list[tuple[str | None, str]] = []
     stimulus = f"You've walked up to {target.identity.name}. Say your opening line."
     speaker, other = initiator, target
     closing = False
     for _ in range(turns):
-        base = scene() if scene is not None else Scene()
+        base = scene(speaker) if scene is not None else Scene()
         context = _conversation_context(speaker, other, lines, opening=not transcript, closing=closing)
         result = speaker.respond(
             stimulus,
@@ -117,17 +128,17 @@ def run_conversation(
             if closing or result.action is None or result.action["name"] not in IN_CONVERSATION_ACTIONS or acted_before:
                 break
             # Part of the conversation, not a way out of it: note it in the
-            # transcript both sides see, then the same speaker follows up
-            # (hands over the goods, says what they found...). Twice in a
-            # row still ends it -- no looping on actions.
+            # speaker's own view of the transcript, then the same speaker
+            # follows up (hands over the goods, says what they found...).
+            # Twice in a row still ends it -- no looping on actions.
             outcome = str(result.action["result"]).split(". ")[0].rstrip(".")
-            lines.append(f"({speaker.identity.name}: {result.action['name']} -- {outcome}.)")
+            lines.append((speaker.identity.name, f"(You: {result.action['name']} -- {outcome}.)"))
             stimulus = f"({result.action['result']}) Now say your next line to {other.identity.name}."
             continue
         if closing:
             break
         closing = result.ends_conversation
-        lines.append(f"{speaker.identity.name}: {result.utterance}")
+        lines.append((None, f"{speaker.identity.name}: {result.utterance}"))
         stimulus = f'{speaker.identity.name} says: "{result.utterance}"'
         speaker, other = other, speaker
     return transcript
@@ -138,26 +149,30 @@ def conversation_recap(transcript: list[ConversationTurn], name: str) -> str:
     untagged (see NPCRegistry), so it surfaces whoever they talk to next --
     the per-turn memories are tagged with the partner and only come back
     around them, which left an NPC asking a second person what the first
-    had just told it.
+    had just told it. Only `name`'s own tool calls are in it -- the other
+    side's were never visible to them.
     """
     partner = next((t.listener if t.speaker == name else t.speaker for t in transcript), "someone")
     lines = []
     for turn in transcript:
         if turn.utterance is not None:
             lines.append(f"{turn.speaker}: {turn.utterance}")
-        elif turn.action is not None:
-            lines.append(f"({turn.speaker}: {turn.action['name']} -- {turn.action['result']})")
+        elif turn.action is not None and turn.speaker == name:
+            lines.append(f"(You: {turn.action['name']} -- {turn.action['result']})")
     return f"Earlier you talked with {partner}:\n" + "\n".join(f"  {line}" for line in lines)
 
 
-def _conversation_context(speaker: Agent, other: Agent, lines: list[str], *, opening: bool, closing: bool) -> str:
+def _conversation_context(
+    speaker: Agent, other: Agent, lines: list[tuple[str | None, str]], *, opening: bool, closing: bool
+) -> str:
     other_name = other.identity.name
     if opening:
         parts = [f"You've chosen to talk to {other_name}, who is right in front of you. Open the conversation."]
     else:
         parts = [f"You're in a conversation with {other_name}."]
-    if lines:
-        parts.append("Conversation so far:\n" + "\n".join(lines))
+    visible = [line for owner, line in lines if owner is None or owner == speaker.identity.name]
+    if visible:
+        parts.append("Conversation so far:\n" + "\n".join(visible))
     if closing:
         parts.append(f"{other_name} is wrapping up the conversation. Answer their goodbye in one short line.")
     elif not opening:

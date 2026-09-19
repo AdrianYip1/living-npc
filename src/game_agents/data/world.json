@@ -1,14 +1,37 @@
 {
+  "town": {
+    "name": "Tallbough",
+    "about": [
+      "Tallbough is a tiny settlement where a few dirt tracks cross, named for the big tree beside Mara's hut.",
+      "The whole town is what's listed here: Mara's hut, the forge, and the meadow, and the only people who live here are the townsfolk listed below. There is no market, inn, tavern, well, stables, shrine, mayor, or guard. If someone asks about a place or person that isn't listed, it doesn't exist here.",
+      "All around is open grassland, with dirt tracks running off in every direction. There's no river, lake, or sea anywhere nearby.",
+      "Everything beyond is far away. Other towns are many days' walk, and the people who live here have never gone much further than a day out. They know the wider world only as names and rumors travelers bring -- and travelers' tales are often secondhand, exaggerated, or just wrong."
+    ]
+  },
   "places": [
     {
-      "name": "The Forge",
-      "position": [12, -30],
-      "description": "Mara's blacksmith shop, inherited from her mother. A soot-blackened stone workshop with a roaring hearth, an anvil out front, and racks of horseshoes, hinges, and tools for sale. The ring of the hammer carries across town from sunrise to dusk."
+      "name": "Mara's Hut",
+      "position": [-62, -64],
+      "spots": [[-40, -12], [-12, -40]],
+      "description": "The only house in town: a low timber hut where Mara lives, with Finn lodging in his own room. The big tree stands right beside it."
     },
     {
-      "name": "The Docks",
-      "position": [70, 45],
-      "description": "A weathered wooden pier on the water's edge where Finn fishes. Nets hang drying on the posts, a few small boats are tied up, and travelers passing through often stop here to rest and swap news."
+      "name": "The Forge",
+      "position": [78, -76],
+      "description": "Mara's open-air blacksmith forge under the big tree on the east side of town, across from her hut, inherited from her mother. A stone hearth, an anvil, and racks of horseshoes, hammers, and iron ingots for sale. The ring of the hammer carries across town from sunrise to dusk."
+    },
+    {
+      "name": "The Meadow",
+      "position": [-50, 50],
+      "description": "Open grassland where Finn forages herbs, mushrooms, and wild berries. No trees or buildings, just long grass and wildflowers, and travelers crossing town often cut through it."
     }
-  ]
+  ],
+  "prices": {
+    "horseshoe": 3,
+    "iron ingot": 4,
+    "hammer": 10,
+    "dried herbs": 1,
+    "healing salve": 5,
+    "foraging basket": 4
+  }
 }

@@ -17,7 +17,7 @@ from game_agents.identity import Identity
 from game_agents.llm import ENDS_CONVERSATION_FIELD, SPEAK_TOOL_NAME, LLMResult, ToolCall
 from game_agents.registry import NPCRegistry
 from game_agents.storage import save_identities
-from game_agents.world import IN_REACH_LABEL
+from game_agents.world import IN_REACH_LABEL, IN_VIEW_LABEL
 
 from mini_map.simulation import Simulation
 
@@ -153,7 +153,8 @@ class ResidentAwarenessTests(unittest.TestCase):
             sim.wait_for_pending()
 
             self.assertIn(f"{IN_REACH_LABEL}: Finn at (5, 0).", llm.systems["Mara"][0])
-            self.assertNotIn("Gus", llm.systems["Mara"][0])
+            # The whole town is in view, just not in reach.
+            self.assertIn(f"{IN_VIEW_LABEL}: Gus at (60, 60).", llm.systems["Mara"][0])
 
 
 class ConversationPacingTests(unittest.TestCase):

@@ -16,6 +16,7 @@ from game_agents.conversation_export import (
     npc_participant,
     npc_state_entry,
     sanitize_for_speech,
+    time_state,
 )
 from game_agents.identity import Identity
 
@@ -254,16 +255,33 @@ class NpcStateTests(unittest.TestCase):
         self.assertEqual(npc_state_entry(1, (0, 50), (3.0, 0.0)), {"slot": 1, "x": 0.5, "z": 0.75, "rot": 1.571})
         self.assertEqual(npc_state_entry(2, (500, -500), (0.0, -1.0))["x"], 1.0)  # clamped
 
+    def test_time_state(self):
+        self.assertEqual(
+            time_state(720, "afternoon", 2.0),
+            {"minute": 720, "day_fraction": 0.5, "phase": "afternoon", "rate": 2.0},
+        )
+        self.assertEqual(time_state(495, "morning", 0.0)["day_fraction"], 0.3438)
+
     def test_written_whole_and_only_when_changed(self):
         with tempfile.TemporaryDirectory() as tmp:
             exporter = ConversationExporter(tmp)
             npcs = [npc_state_entry(0, (0, 0), (0.0, 1.0))]
-            exporter.write_npc_state(npcs)
+            noon = time_state(720, "afternoon", 2.0)
+            exporter.write_npc_state(noon, npcs)
             path = Path(tmp) / "npc_state.json"
-            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"npcs": npcs})
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"time": noon, "npcs": npcs})
             path.unlink()
-            exporter.write_npc_state(list(npcs))
+            exporter.write_npc_state(dict(noon), list(npcs))
             self.assertFalse(path.exists())
+
+    def test_rewritten_when_only_the_time_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exporter = ConversationExporter(tmp)
+            npcs = [npc_state_entry(0, (0, 0), (0.0, 1.0))]
+            exporter.write_npc_state(time_state(720, "afternoon", 2.0), npcs)
+            exporter.write_npc_state(time_state(721, "afternoon", 2.0), npcs)
+            path = Path(tmp) / "npc_state.json"
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["time"]["minute"], 721)
 
     def test_clear_keeps_the_renderers_own_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -271,7 +289,7 @@ class NpcStateTests(unittest.TestCase):
             (directory / "bounds.json").write_text("{}", encoding="utf-8")
             (directory / "spoken.json").write_text("{}", encoding="utf-8")
             exporter = ConversationExporter(directory)
-            exporter.write_npc_state([npc_state_entry(0, (0, 0), (0.0, 1.0))])
+            exporter.write_npc_state(time_state(0, "night", 0.0), [npc_state_entry(0, (0, 0), (0.0, 1.0))])
             exporter.point_at(exporter.start([npc_participant(MARA)]), ["Mara"])
             exporter.clear()
             self.assertEqual(sorted(entry.name for entry in directory.iterdir()), ["bounds.json", "spoken.json"])

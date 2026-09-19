@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from environment_agent.agent import EnvironmentAgent
 
-from game_agents.bootstrap import CONVERSATION_LOG_DIR, build_registry
+from game_agents.bootstrap import CONVERSATION_LOG_DIR, TRAVELER_NAMES_PATH, build_registry
 from game_agents.conversation_export import ConversationExporter
 
 from . import speech
@@ -47,9 +47,9 @@ TICKS_PER_REAL_MINUTE = 60.0
 LLM_CALLS_PER_GAME_HOUR = 4.0
 # Inclusive (min, max) traveler arrivals per in-game day. Deliberately high
 # for now so travelers are easy to spot: at the default clock speed (a day
-# every 24 real minutes) 15-30 is one every ~64 real seconds on average.
+# every 24 real minutes) 10-20 is one every ~96 real seconds on average.
 # EnvironmentAgent's own default is a more realistic (2, 6).
-TRAVELERS_PER_DAY = (15, 30)
+TRAVELERS_PER_DAY = (10, 20)
 
 # Set by run() before the server starts; the handler reads it per-request.
 # A single-process script gets to have one simulation as shared state
@@ -183,6 +183,7 @@ def run(
         environment,
         exporter=exporter,
         backend=backend,
+        used_names_path=TRAVELER_NAMES_PATH,
         ticks_per_real_minute=ticks_per_real_minute,
         llm_calls_per_game_hour=llm_calls_per_game_hour,
     )

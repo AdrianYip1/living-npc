@@ -47,6 +47,11 @@ CONVERSATION_HIDDEN_ACTIONS = frozenset({"initiate_conversation"})
 # outside one.
 CONVERSATION_ONLY_ACTIONS = frozenset({"buy_item", "sell_item"})
 
+# Only offered while talking with the player (see respond()'s
+# `with_player`): noting their name, or selling to them, makes no sense
+# with anyone else.
+PLAYER_ONLY_ACTIONS = frozenset({"note_player_name", "sell_to_player"})
+
 
 @dataclass
 class TurnResult:
@@ -106,6 +111,15 @@ class Agent:
             if inventory is not None
             else Inventory(money=identity.starting_money, items=dict(identity.starting_items))
         )
+        # The player's name, once they've said it (see the registry's
+        # note_player_name tool) -- until then they're a stranger.
+        self.player_name: str | None = None
+
+    def player_label(self) -> str:
+        """How this NPC refers to the player: by name once they know it."""
+        if self.player_name:
+            return f"{self.player_name} (the player)"
+        return "the player (you don't know their name yet)"
 
     def respond(
         self,
@@ -115,6 +129,7 @@ class Agent:
         tags: set[str] | None = None,
         routine: bool = False,
         conversation: bool = False,
+        with_player: bool = False,
         hide: frozenset[str] = frozenset(),
     ) -> TurnResult:
         """`routine` marks a turn nobody prompted (e.g. the world tick's
@@ -129,24 +144,53 @@ class Agent:
         the exchange on the same line instead of costing an extra turn.
         Trades (CONVERSATION_ONLY_ACTIONS) are only offered on one.
 
+        `with_player` marks a turn talking with the player, the only place
+        PLAYER_ONLY_ACTIONS are offered.
+
         `hide` takes options off the table for this one turn, by tool name
         -- SPEAK_TOOL_NAME included, e.g. so an NPC that just said goodbye
         has to actually leave instead of saying it again.
         """
         scene = scene or Scene()
         relevant = self.memory.retrieve(tags=tags)
+        system = self._build_system_prompt(scene, relevant)
 
-        offered = [
-            *([] if SPEAK_TOOL_NAME in hide else [self._speak_schema(conversation=conversation)]),
-            *(schema for schema in self.tools.schemas() if not self._hidden(schema["name"], conversation, hide)),
-        ]
-        result = self.llm.complete(
-            system=self._build_system_prompt(scene, relevant),
-            messages=[{"role": "user", "content": stimulus}],
-            tools=offered,
-        )
+        def offer(hide: frozenset[str]) -> list[dict[str, Any]]:
+            return [
+                *([] if SPEAK_TOOL_NAME in hide else [self._speak_schema(conversation=conversation)]),
+                *(
+                    schema
+                    for schema in self.tools.schemas()
+                    if not self._hidden(schema["name"], conversation, hide, with_player=with_player)
+                ),
+            ]
+
+        offered = offer(hide)
+        result = self.llm.complete(system=system, messages=[{"role": "user", "content": stimulus}], tools=offered)
         call = result.tool_call
         allowed = call.name in {schema["name"] for schema in offered}
+
+        # Only a look, not a move (look_around, check_inventory): hand what
+        # they found straight back and let them decide again, this same
+        # turn -- otherwise looking would cost the whole turn (and, talking
+        # to the player, leave them with no reply). Each look is offered
+        # once per turn, so this always ends. Not stored: where everyone
+        # stood a moment ago goes stale fast.
+        looked: set[str] = set()
+        notes: list[str] = []
+        while allowed and (tool := self.tools.get(call.name)) is not None and tool.informational:
+            found = self.tools.execute(call.name, call.arguments)
+            action_log.info("%s: %s() -> %s", self.identity.name, call.name, found)
+            looked.add(call.name)
+            notes.append(f"(You {call.name.replace('_', ' ')}: {found})")
+            offered = offer(hide | looked)
+            result = self.llm.complete(
+                system=system,
+                messages=[{"role": "user", "content": "\n\n".join([stimulus, *notes])}],
+                tools=offered,
+            )
+            call = result.tool_call
+            allowed = call.name in {schema["name"] for schema in offered}
 
         ends_conversation = False
         if not allowed:
@@ -177,8 +221,8 @@ class Agent:
         return turn
 
     @staticmethod
-    def _hidden(name: str, conversation: bool, hide: frozenset[str]) -> bool:
-        if name in hide:
+    def _hidden(name: str, conversation: bool, hide: frozenset[str], *, with_player: bool = False) -> bool:
+        if name in hide or (name in PLAYER_ONLY_ACTIONS and not with_player):
             return True
         return name in (CONVERSATION_HIDDEN_ACTIONS if conversation else CONVERSATION_ONLY_ACTIONS)
 

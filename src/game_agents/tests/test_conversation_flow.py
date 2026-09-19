@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from game_agents.agent import Agent
-from game_agents.conversation import ConversationHooks, run_conversation
+from game_agents.conversation import ConversationHooks, conversation_recap, run_conversation
 from game_agents.identity import Identity
 from game_agents.llm import ENDS_CONVERSATION_FIELD, SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
 from game_agents.registry import CONVERSATION_STARTED_PREFIX, NPCRegistry, conversation_happened
@@ -145,16 +145,18 @@ class ConversationHooksTests(unittest.TestCase):
 
 
 class SurroundingsTests(unittest.TestCase):
-    def test_splits_people_by_reach_and_skips_the_far_away(self):
+    def test_splits_everyone_by_reach_nearest_first(self):
         text = render_surroundings(
             (0, 0), [("Far", (90, 0), False), ("View", (30, 0), False), ("Near", (5, 0), True)]
         )
         self.assertEqual(
-            text, f"{IN_REACH_LABEL}: Near at (5, 0) (busy talking).\n{IN_VIEW_LABEL}: View at (30, 0)."
+            text,
+            f"{IN_REACH_LABEL}: Near at (5, 0) (busy talking).\n"
+            f"{IN_VIEW_LABEL}: View at (30, 0); Far at (90, 0).",
         )
 
-    def test_empty_when_nobody_is_around(self):
-        self.assertEqual(render_surroundings((0, 0), [("Far", (90, 90), False)]), "")
+    def test_empty_when_nobody_else_is_in_town(self):
+        self.assertEqual(render_surroundings((0, 0), []), "")
 
 
 class SoakRegressionTests(unittest.TestCase):
@@ -177,12 +179,15 @@ class SoakRegressionTests(unittest.TestCase):
             self.assertIn("move_to", offered)
             self.assertIn("initiate_conversation", [t["name"] for t in registry.get("Mara").tools.schemas()])
 
-    def _trader(self, name, script):
+    def _trader(self, name, script, seen=None):
         """An agent that plays `script` in order: a string is a line, a
-        dict is a tool call ({"name": ..., "arguments": ...})."""
+        dict is a tool call ({"name": ..., "arguments": ...}). Every system
+        prompt it gets is appended to `seen`, if given."""
 
         class _Script:
             def complete(self, *, system, messages, tools):
+                if seen is not None:
+                    seen.append(system)
                 step = script.pop(0) if script else "..."
                 if isinstance(step, dict):
                     return LLMResult(tool_call=ToolCall(**step))
@@ -234,6 +239,26 @@ class SoakRegressionTests(unittest.TestCase):
 
         self.assertEqual(len(transcript), 2)
 
+    def test_tool_calls_are_private_to_whoever_made_them(self):
+        # Finn checked his pack mid-conversation and Corwin saw the result
+        # in the shared transcript ("Says he has five fish right there").
+        sell = {"name": "sell_item", "arguments": {}}
+        yusef_saw, finn_saw = [], []
+        yusef = self._trader("Yusef", ["Three fish for six?", "Pleasure.", "Bye!"], yusef_saw)
+        finn = self._trader("Finn", ["Deal.", sell, "There you go.", "Take care."], finn_saw)
+
+        transcript = run_conversation(yusef, finn, turns=8)
+
+        self.assertTrue(any("You sold 3 x fish" in system for system in finn_saw[2:]))
+        after_sale = yusef_saw[2:]
+        self.assertTrue(after_sale)
+        for system in after_sale:
+            self.assertIn("Finn: There you go.", system)
+            self.assertNotIn("sell_item", system)
+            self.assertNotIn("18 coins", system)
+        self.assertNotIn("sell_item", conversation_recap(transcript, "Yusef"))
+        self.assertIn("(You: sell_item -- You sold 3 x fish", conversation_recap(transcript, "Finn"))
+
     def test_walking_to_someone_stops_in_front_of_them(self):
         self.assertEqual(keep_personal_space((12, -30), (40, -30), [(12, -30)]), (24, -30))
 
@@ -260,8 +285,8 @@ class SoakRegressionTests(unittest.TestCase):
             taken.append(spot)
 
     def test_icons_do_not_overlap_at_personal_space(self):
-        # NPC_RADIUS 32px and WORLD_SCALE 6 in app.js: an icon is ~10.7 units wide.
-        self.assertGreater(PERSONAL_SPACE, 2 * 32 / 6)
+        # NPC_RADIUS 24px and WORLD_SCALE 6 in app.js: an icon is 8 units wide.
+        self.assertGreater(PERSONAL_SPACE, 2 * 24 / 6)
         self.assertLess(PERSONAL_SPACE, INTERACTION_RANGE)
 
     def test_move_tool_keeps_personal_space(self):

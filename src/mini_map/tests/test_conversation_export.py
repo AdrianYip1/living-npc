@@ -154,12 +154,27 @@ class NpcStateExportTests(unittest.TestCase):
             sim.export_npc_state()
             state = json.loads((log / "npc_state.json").read_text(encoding="utf-8"))
             self.assertEqual(
-                state,
-                {"npcs": [
+                state["npcs"],
+                [
                     {"slot": 0, "x": 0.0, "z": 0.5, "rot": -1.571},
                     {"slot": 1, "x": 1.0, "z": 1.0, "rot": 0.0},
-                ]},
+                ],
             )
+
+    def test_carries_the_environment_clock_and_stops_its_rate_while_paused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "log"
+            environment = EnvironmentAgent(seed=1)
+            sim = Simulation(_registry(tmp, _MutterLLM()), environment, line_pacing=False, exporter=ConversationExporter(log))
+            sim.export_npc_state()
+            clock = json.loads((log / "npc_state.json").read_text(encoding="utf-8"))["time"]
+            self.assertEqual(clock["minute"], environment.minute_of_day)
+            self.assertEqual(clock["phase"], environment.time_of_day.value)
+            self.assertGreater(clock["rate"], 0.0)
+            sim.pause()
+            sim.export_npc_state()
+            clock = json.loads((log / "npc_state.json").read_text(encoding="utf-8"))["time"]
+            self.assertEqual(clock["rate"], 0.0)
 
 
 class SpeechPacingTests(unittest.TestCase):

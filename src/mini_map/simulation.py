@@ -9,7 +9,9 @@ from __future__ import annotations
 import logging
 import math
 import random
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -18,16 +20,24 @@ from typing import Any, Callable
 
 from environment_agent.agent import EnvironmentAgent
 from environment_agent.time_of_day import MINUTES_PER_DAY
-from environment_agent.travelers import Traveler
+from environment_agent.travelers import Traveler, spare_names
 
-from game_agents.agent import Agent, Scene, TurnResult
-from game_agents.conversation import ConversationHooks, ConversationTurn
-from game_agents.conversation_export import PLAYER_PARTICIPANT, ConversationExporter, npc_participant, npc_state_entry
+from game_agents.agent import CONVERSATION_ONLY_ACTIONS, Agent, Scene, TurnResult
+from game_agents.conversation import ConversationHooks, ConversationTurn, save_transcript
+from game_agents.conversation_export import (
+    PLAYER_ID,
+    PLAYER_PARTICIPANT,
+    ConversationExporter,
+    npc_participant,
+    npc_state_entry,
+    time_state,
+)
 from game_agents.identity import Identity
 from game_agents.llm import SPEAK_TOOL_NAME
 from game_agents.registry import NPCRegistry, conversation_happened
 from game_agents.storage import identity_to_record
 from game_agents.traveler_identity import generate_traveler_identity
+from game_agents.traveler_names import UsedTravelerNames, names_in_memories
 from game_agents.world import INTERACTION_RANGE, MAP_MAX, MAP_MIN, distance, render_surroundings
 
 from .traveler_purpose import BUY, TravelerPurpose, pick_purpose
@@ -190,8 +200,13 @@ class Simulation:
         line_pacing: bool = True,
         exporter: ConversationExporter | None = None,
         backend: str = "",
+        used_names_path: str | Path | None = None,
     ) -> None:
         self._registry = registry
+        # Every name a traveler has gone by, this run or any earlier one the
+        # residents remember -- new travelers stay off them (see
+        # _admit_traveler). Saved to used_names_path, if given.
+        self._used_names = UsedTravelerNames(used_names_path, remembered=names_in_memories(registry.residents()))
         # Which LLM backend is driving the NPCs (bootstrap's GAME_AGENTS_LLM
         # name) -- only reported to the page, so a mock run is obvious.
         self._backend = backend
@@ -263,6 +278,18 @@ class Simulation:
         self._player_export: tuple[str, str] | None = None
         self._export_lock = threading.Lock()
         self._player_position: tuple[float, float] = (0.0, 0.0)
+        # Who the player is talking to right now, if anyone -- one
+        # conversation at a time, whoever started it. And, when an NPC
+        # started it, what the page needs to open it on the player's side:
+        # {"id", "name", "opening"} ("opening" None until the line's ready).
+        self._player_partner: str | None = None
+        self._player_invite: dict[str, Any] | None = None
+        self._next_invite_id = 1
+        # The player's current conversation as a transcript, and the file
+        # it's saved to -- rewritten after every line, so a conversation cut
+        # short (the server stopped) still leaves everything said so far.
+        self._player_log: tuple[Path, list[ConversationTurn]] | None = None
+        self._player_lock = threading.Lock()
         # The direction each NPC last moved in, so it keeps facing that way
         # once it stops (see export_npc_state), and when that last went out.
         self._facing: dict[str, tuple[float, float]] = {}
@@ -274,6 +301,7 @@ class Simulation:
             on_turn=self._on_conversation_turn,
             on_end=self._on_conversation_end,
             refuse=self._refuse_conversation,
+            invite_player=self._invite_player,
         )
 
     def run_forever(self) -> None:
@@ -381,33 +409,69 @@ class Simulation:
     # ------------------------------------------------------------------ #
     # travelers
     # ------------------------------------------------------------------ #
+    def _add_traveler_under_free_name(
+        self,
+        identity: Identity,
+        spares: list[str],
+        used_names: list[str],
+        **kwargs: Any,
+    ) -> tuple[Identity, Agent] | None:
+        """Adds the traveler, renamed to one of `spares` if its own name is
+        taken. The fallback identity skips generation's taken-name check and
+        two generations can race to one name, so add_traveler() -- which
+        checks under its lock -- has the final say, and a refusal just moves
+        on to the next name. A name some earlier traveler went by
+        (`used_names`, least recently used first) is used only once nothing
+        else is free -- it would read as the same person back again -- and
+        then the one used longest ago. Never numbered ("Mara 2"); None if
+        every candidate is in use.
+        """
+        used = {name.lower(): i for i, name in enumerate(used_names)}
+        candidates = list(dict.fromkeys([identity.name, *spares]))
+        # Stable: fresh names first in their given order, then used ones oldest first.
+        candidates.sort(key=lambda name: -1 if name.lower() not in used else used[name.lower()])
+        for name in candidates:
+            renamed = _renamed(identity, name)
+            try:
+                return renamed, self._registry.add_traveler(renamed, **kwargs)
+            except ValueError:
+                continue
+        return None
+
     def _admit_traveler(self, sketch: Traveler, clock: str) -> None:
         """Worker thread: generate the identity, then bring the traveler
         into the world and give it its first turn.
         """
         with self._traveler_lock:
-            recent_names = [arrival["identity"]["name"] for arrival in self._traveler_arrivals]
             purpose = pick_purpose(self._rng, self._registry.places, self._registry.residents())
             fallback_money = self._rng.randint(*self.TRAVELER_FALLBACK_MONEY)
+        used_names = self._used_names.names()
         identity = generate_traveler_identity(
             self._registry.llm,
             _traveler_brief(sketch, purpose),
             fallback=_fallback_identity(sketch, purpose, money=fallback_money),
-            taken_names=[agent.identity.name for agent in self._registry.all()] + recent_names,
+            taken_names=list(dict.fromkeys([agent.identity.name for agent in self._registry.all()] + used_names)),
         )
-        # The fallback skips the taken-name check, and two generations can
-        # race to the same name -- the registry has the final say.
-        identity.name = self._registry.unique_name(identity.name)
         if purpose.kind == BUY:
             # Came to buy something: make sure they can pay for it.
             identity.starting_money = max(identity.starting_money, self.TRAVELER_BUYER_MIN_MONEY)
 
         entry, exit_point = self._pick_entry_and_exit()
         standing_context = (
-            f"Your exit point: ({exit_point[0]}, {exit_point[1]}), on the edge of the map. "
+            f"Your way out of town: ({exit_point[0]}, {exit_point[1]}), where a track leaves on the far side. "
             "Reaching it means leaving town.\n" + purpose.standing_context()
         )
-        agent = self._registry.add_traveler(identity, position=entry, standing_context=standing_context)
+        with self._traveler_lock:
+            spares = spare_names(identity.gender)
+            self._rng.shuffle(spares)
+        added = self._add_traveler_under_free_name(
+            identity, spares, used_names, position=entry, standing_context=standing_context
+        )
+        if added is None:
+            log.warning("traveler %r not admitted: every spare %s name is in use", identity.name, identity.gender)
+            return
+        identity, agent = added
+        self._used_names.record(identity.name)
         now = self._environment.elapsed_minutes
         self._traveler_state[identity.name] = _TravelerState(
             exit_point=exit_point,
@@ -435,7 +499,7 @@ class Simulation:
         self._start_traveler_turn(
             identity.name,
             f"You've just arrived at the edge of town, at ({entry[0]}, {entry[1]}). "
-            f"Your exit point is ({exit_point[0]}, {exit_point[1]}), on the far side of the map."
+            f"Your way out of town is ({exit_point[0]}, {exit_point[1]}), on the far side."
             + self._traveler_state[identity.name].reminder(agent, now),
         )
 
@@ -517,7 +581,7 @@ class Simulation:
                 self._start_traveler_turn(
                     name,
                     f"You've reached ({reached[0]}, {reached[1]}).{company} "
-                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                    f"Your way out of town is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                 )
                 continue
 
@@ -530,7 +594,7 @@ class Simulation:
                         self._start_traveler_turn(
                             name,
                             f"{target} has finished their conversation and is free to talk now. "
-                            f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                            f"Your way out of town is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                         )
                         continue
                 elif now - st.waiting_since >= self.TRAVELER_MAX_WAIT_MINUTES:
@@ -546,7 +610,7 @@ class Simulation:
                 self._start_traveler_turn(
                     name,
                     f"You've just finished talking with {partner} and already said your goodbyes. "
-                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                    f"Your way out of town is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                     hide=AFTER_CONVERSATION,
                 )
                 continue
@@ -556,7 +620,7 @@ class Simulation:
                 self._start_traveler_turn(
                     name,
                     f"You're standing at ({agent.position[0]:.0f}, {agent.position[1]:.0f}), not walking anywhere. "
-                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                    f"Your way out of town is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                 )
 
     def _start_traveler_turn(self, name: str, stimulus: str, *, hide: frozenset[str] = frozenset()) -> None:
@@ -602,6 +666,10 @@ class Simulation:
             for other in self._registry.all()
             if other is not agent
         ]
+        player_position = self._registry.player_position
+        if player_position is not None:
+            talking = self._player_partner is not None and self._player_partner != agent.identity.name
+            others.append((agent.player_label(), player_position, talking))
         return render_surroundings(agent.position, others)
 
     def _query_npcs(self) -> None:
@@ -626,7 +694,8 @@ class Simulation:
             scene = Scene(
                 time=f"{clock} ({phase})",
                 context=(
-                    f"It's {clock}, {phase}, and {weather} out. Decide what you do right now, guided by your habits."
+                    f"It's {clock}, {phase}, and {weather} out. Decide what you do right now, "
+                    "guided by your habits, personal profile, and recent interactions."
                     + (f"\n{surroundings}" if surroundings else "")
                 ),
             )
@@ -778,6 +847,8 @@ class Simulation:
 
     def set_player_position(self, x: float, y: float) -> None:
         self._player_position = (x, y)
+        # Where NPCs see the player, and check they're close enough to talk.
+        self._registry.player_position = (x, y)
 
     def update_active_conversation(self) -> None:
         """Points active.json at the player's conversation if there is one,
@@ -812,7 +883,8 @@ class Simulation:
             self._exporter.point_at(best[1], best[2])
 
     def export_npc_state(self) -> None:
-        """Sends every NPC's position and facing to the renderer. Slots are
+        """Sends every NPC's position and facing, plus the in-game time, to
+        the renderer -- the time even while paused (with a rate of 0). Slots are
         a PLACEHOLDER until settled with the renderer side: residents first
         in registry order, then travelers in arrival order -- the renderer
         drops any slot it has no body for, so residents get bodies first.
@@ -833,8 +905,10 @@ class Simulation:
                 self._facing[name] = (dx, dy)
             elif math.hypot(*agent.velocity) > 1.0:
                 self._facing[name] = agent.velocity
-            entries.append(npc_state_entry(slot, agent.position, self._facing.get(name, (0.0, 1.0)), name=name))
-        self._exporter.write_npc_state(entries)
+            entries.append(npc_state_entry(slot, agent.position, self._facing.get(name, (0.0, 1.0))))
+        rate = 0.0 if self.is_paused() else self._game_minutes_per_real_minute() / 60.0
+        time_now = time_state(self._environment.minute_of_day, self._environment.time_of_day.value, rate)
+        self._exporter.write_npc_state(time_now, entries)
 
     def _refuse_conversation(self, initiator: str, target: str) -> str | None:
         talked_at = self._talked_at.get(frozenset((initiator, target)))
@@ -957,17 +1031,144 @@ class Simulation:
         to them, exactly as if they were mid-exchange with someone else.
         """
         agent = self._registry.get(name)
-        if agent is None or not self._registry.try_occupy(name):
+        if agent is None:
             return False
-        if self._exporter is not None:
-            conversation_id = self._exporter.start([dict(PLAYER_PARTICIPANT), npc_participant(agent.identity)])
-            with self._export_lock:
-                previous, self._player_export = self._player_export, (conversation_id, name)
-            if previous is not None:
-                self._exporter.end(previous[0])
+        with self._player_lock:
+            if self._player_partner not in (None, name) or not self._registry.try_occupy(name):
+                return False
+            self._player_partner = name
+            self._begin_player_log(f"player_{name}")
+        self._start_player_export(agent)
         return True
 
+    def _begin_player_log(self, stem: str) -> None:
+        """Named like NPC-to-NPC transcripts: whoever started it first."""
+        log_dir = self._registry.conversation_log_dir
+        if log_dir is None:
+            self._player_log = None
+            return
+        self._player_log = (log_dir / f"{stem}_{int(time.time() * 1000)}.json", [])
+
+    def _log_player_turn(self, name: str, turn: ConversationTurn) -> None:
+        with self._player_lock:
+            if self._player_partner != name or self._player_log is None:
+                return
+            path, transcript = self._player_log
+            transcript.append(turn)
+            save_transcript(transcript, path)
+
+    def _log_npc_reply(self, name: str, stimulus: str, result: TurnResult) -> None:
+        self._log_player_turn(
+            name,
+            ConversationTurn(
+                speaker=name,
+                listener=PLAYER_ID,
+                stimulus=stimulus,
+                utterance=result.utterance,
+                action=result.action,
+                ends_conversation=result.ends_conversation,
+            ),
+        )
+
+    def _start_player_export(self, agent: Agent) -> None:
+        if self._exporter is None:
+            return
+        conversation_id = self._exporter.start([dict(PLAYER_PARTICIPANT), npc_participant(agent.identity)])
+        with self._export_lock:
+            previous, self._player_export = self._player_export, (conversation_id, agent.identity.name)
+        if previous is not None:
+            self._exporter.end(previous[0])
+
+    def _invite_player(self, name: str) -> str | None:
+        """The invite_player hook: `name` walked up to the player to talk.
+        Claims them and opens the conversation now (so the player can't be
+        grabbed by someone else meanwhile); their opening line is decided
+        on a worker, and the page opens the panel on its own (see state()'s
+        player_invite).
+        """
+        agent = self._registry.get(name)
+        if agent is None:
+            return "You can't talk to the player right now."
+        with self._player_lock:
+            if self._player_partner is not None:
+                return "The player is busy talking with someone else right now."
+            # The inviting NPC's own turn is still running, so it isn't
+            # claimed yet -- this is the claim.
+            if not self._registry.try_occupy(name):
+                return "You can't talk to the player right now."
+            self._player_partner = name
+            self._begin_player_log(f"{name}_player")
+            invite = {"id": self._next_invite_id, "name": name, "opening": None}
+            self._next_invite_id += 1
+            self._player_invite = invite
+        self._start_player_export(agent)
+        self._last_activity[name] = "talking with the player"
+        if not self._submit(self._conversation_pool, self._open_player_conversation, name, invite["id"]):
+            self.end_conversation(name)
+            return "You can't talk to the player right now."
+        return None
+
+    def _open_player_conversation(self, name: str, invite_id: int) -> None:
+        """Worker thread: the NPC's opening line to the player."""
+        try:
+            agent = self._registry.get(name)
+            if agent is None:
+                return
+            stimulus = f"You've walked up to {agent.player_label()}. Say your opening line."
+            result = agent.respond(
+                stimulus,
+                scene=self._player_scene(agent, opening=True),
+                tags={"player"},
+                conversation=True,
+                with_player=True,
+                hide=CONVERSATION_ONLY_ACTIONS,
+            )
+            with self._player_lock:
+                current = self._player_invite
+                if current is None or current["id"] != invite_id:
+                    return  # the player already walked off
+            self._log_npc_reply(name, stimulus, result)
+            if result.utterance is None:
+                # Acted instead of speaking: nothing to open the panel on.
+                self.end_conversation(name)
+                self._last_activity[name] = self._describe(result)
+                return
+            self._record_player_line(agent, result.utterance)
+            with self._player_lock:
+                if self._player_invite is not None and self._player_invite["id"] == invite_id:
+                    self._player_invite["opening"] = result.utterance
+        except Exception:
+            log.exception("%s's opening line to the player failed", name)
+            self.end_conversation(name)
+
+    def _player_scene(self, agent: Agent, *, opening: bool = False) -> Scene:
+        who = agent.player_label()
+        situation = (
+            f"You've chosen to talk to {who}, who is right in front of you. Open the conversation."
+            if opening
+            else f"{who[0].upper()}{who[1:]} is talking with you directly, face to face."
+        )
+        base = self._scene(agent)
+        return Scene(time=base.time, context=f"{situation}\n{base.context}")
+
+    def _record_player_line(self, agent: Agent, utterance: str) -> None:
+        name = agent.identity.name
+        self._last_activity[name] = f"said to the player: {utterance}"
+        self._publish_speech(name, "player", utterance)
+        with self._export_lock:
+            export = self._player_export
+        if export is not None and export[1] == name:
+            # A no-op if the player already walked off mid-reply.
+            self._exporter.line(export[0], agent.identity, utterance)
+
     def end_conversation(self, name: str) -> None:
+        with self._player_lock:
+            if self._player_partner != name:
+                return
+            self._player_partner = None
+            self._player_log = None  # already on disk, line by line
+            if self._player_invite is not None and self._player_invite["name"] == name:
+                self._player_invite = None
         with self._export_lock:
             export = self._player_export
             if export is not None and export[1] == name:
@@ -982,31 +1183,40 @@ class Simulation:
         agent = self._registry.get(name)
         if agent is None:
             return None
-        with self._export_lock:
-            export = self._player_export
-        if export is not None and export[1] != name:
-            export = None
-
-        scene = Scene(
-            time=f"{self._environment.clock} ({self._environment.time_of_day.value})",
-            context=(
-                f"The player has walked up and is speaking with you directly. "
-                f"It's {self._environment.weather.value} out."
-            ),
+        who = f"{agent.player_name} (the player)" if agent.player_name else "The player"
+        self._log_player_turn(
+            name, ConversationTurn(speaker=PLAYER_ID, listener=name, stimulus="", utterance=text, action=None)
         )
+        stimulus = f'{who} says: "{text}"'
         # conversation=True: the player is talking with them, so speaking
         # means answering, not thinking aloud (see Agent._speak_schema).
-        result = agent.respond(text, scene=scene, tags={"player"}, conversation=True)
-        self._last_activity[name] = self._describe(result)
+        # Attributed, like an NPC-to-NPC line: the stimulus is also what gets
+        # remembered, and a bare "go to the well -> Sure" read as small talk
+        # on later ticks rather than something the player asked for.
+        # No buy_item / sell_item: the player has no inventory, so they
+        # could only fail -- and a failed tool call leaves the player with
+        # no reply. sell_to_player covers selling to them instead.
+        result = agent.respond(
+            stimulus,
+            scene=self._player_scene(agent),
+            tags={"player"},
+            conversation=True,
+            with_player=True,
+            hide=CONVERSATION_ONLY_ACTIONS,
+        )
+        self._log_npc_reply(name, stimulus, result)
         if result.utterance is not None:
-            self._publish_speech(name, "player", result.utterance)
-            if export is not None:
-                # A no-op if the player already walked off mid-reply.
-                self._exporter.line(export[0], agent.identity, result.utterance)
+            self._record_player_line(agent, result.utterance)
+        else:
+            self._last_activity[name] = self._describe(result)
         return {
             "utterance": result.utterance,
             "action": None if result.action is None else {"name": result.action["name"]},
         }
+
+    def _current_invite(self) -> dict[str, Any] | None:
+        with self._player_lock:
+            return None if self._player_invite is None else dict(self._player_invite)
 
     def _describe(self, result: TurnResult) -> str:
         if result.utterance is not None:
@@ -1047,6 +1257,9 @@ class Simulation:
             "game_minutes_per_real_minute": self._game_minutes_per_real_minute(),
             "llm_calls_per_game_hour": self._llm_calls_per_game_hour,
             "llm_calls_per_real_minute": self._llm_calls_per_real_minute(),
+            # An NPC-started conversation with the player, while it lasts --
+            # the page opens its panel on seeing a new id.
+            "player_invite": self._current_invite(),
             "npcs": [
                 {
                     "name": agent.identity.name,
@@ -1118,6 +1331,22 @@ def _traveler_brief(sketch: Traveler, purpose: TravelerPurpose) -> str:
     return (
         f"A traveler is arriving in town. They come from {sketch.origin}. {purpose.brief()} "
         f"At a glance they seem {' and '.join(sketch.traits)}."
+    )
+
+
+def _renamed(identity: Identity, name: str) -> Identity:
+    """A copy of `identity` called `name`, with the old name swapped out of
+    its text too -- a generated backstory may name its traveler.
+    """
+    if name == identity.name:
+        return identity
+    old = re.compile(rf"\b{re.escape(identity.name)}\b")
+    return replace(
+        identity,
+        name=name,
+        backstory=old.sub(name, identity.backstory),
+        goals=[old.sub(name, goal) for goal in identity.goals],
+        habits=[old.sub(name, habit) for habit in identity.habits],
     )
 
 

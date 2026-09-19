@@ -42,8 +42,15 @@ changed, so its age doubles as a heartbeat: a stale file means the speech
 side isn't running. speech_done() reads it, so the simulation can hold a
 conversation's next line until the previous one has actually been heard.
 
-npc_state.json places NPC bodies in the 3D scene, rewritten whole
-(atomically) as they move: {"npcs": [{"slot", "x", "z", "rot"}, ...]}.
+npc_state.json places NPC bodies in the 3D scene and carries the in-game
+time, rewritten whole (atomically) as either changes:
+{"time": {"minute", "day_fraction", "phase", "rate"},
+ "npcs": [{"slot", "x", "z", "rot"}, ...]}.
+"minute" is the minute of the day, 0..1439; "day_fraction" is minute / 1440
+(0 = midnight, 0.5 = noon); "phase" is "night" (00-06), "morning",
+"afternoon" or "evening" (18-24). The clock only moves in whole-tick steps,
+so "rate" -- in-game minutes per real second, 0 while paused -- lets the
+renderer advance the time smoothly between rewrites.
 "slot" indexes the renderer's fixed list of bodies -- it ignores slots it
 has no body for. "x"/"z" are the minimap position normalized to 0..1
 across the map (minimap y -> scene z), which the renderer stretches over
@@ -82,6 +89,7 @@ RENDERER_OWNED = frozenset({SPOKEN_ACK, RENDERER_BOUNDS})
 SPEECH_SIDE_STALE_SECONDS = 2.0
 PLAYER_ID = "player"
 PLAYER_PARTICIPANT = {"type": "player", "id": PLAYER_ID, "name": "Player"}
+_MINUTES_PER_DAY = 24 * 60
 
 # The speech side's parser accepts ASCII letters and digits, whitespace, and
 # only , . ! ? ' " -- anything else breaks it.
@@ -135,6 +143,16 @@ def npc_state_entry(slot: int, position: tuple[float, float], facing: tuple[floa
     }
 
 
+def time_state(minute_of_day: int, phase: str, game_minutes_per_real_second: float) -> dict[str, Any]:
+    """npc_state.json's "time" object (see the module docstring)."""
+    return {
+        "minute": minute_of_day,
+        "day_fraction": round(minute_of_day / _MINUTES_PER_DAY, 4),
+        "phase": phase,
+        "rate": round(game_minutes_per_real_second, 4),
+    }
+
+
 def npc_participant(identity: Identity) -> dict[str, str]:
     return {"type": "npc", "id": identity.name, "name": identity.name}
 
@@ -150,7 +168,7 @@ class ConversationExporter:
         # conversation_id -> the last line written (None before the first).
         self._open: dict[str, dict[str, Any] | None] = {}
         self._pointer: dict[str, Any] | None = None
-        self._npc_state: list[dict[str, Any]] | None = None
+        self._npc_state: dict[str, Any] | None = None
 
     def clear(self) -> None:
         """Empties the directory (creating it if missing, so the other side
@@ -243,16 +261,18 @@ class ConversationExporter:
             if self._replace(ACTIVE_POINTER, pointer):
                 self._pointer = pointer
 
-    def write_npc_state(self, npcs: list[dict[str, Any]]) -> None:
-        """Rewrites npc_state.json if it changed. `npcs` are
-        {"slot", "x", "z", "rot"} entries -- see npc_state_entry(). Same
-        atomic replace as point_at(), retried on the next call if refused.
+    def write_npc_state(self, time_now: dict[str, Any], npcs: list[dict[str, Any]]) -> None:
+        """Rewrites npc_state.json if it changed. `time_now` comes from
+        time_state(); `npcs` are {"slot", "x", "z", "rot"} entries -- see
+        npc_state_entry(). Same atomic replace as point_at(), retried on the
+        next call if refused.
         """
+        state = {"time": time_now, "npcs": npcs}
         with self._lock:
-            if npcs == self._npc_state:
+            if state == self._npc_state:
                 return
-            if self._replace(NPC_STATE, {"npcs": npcs}):
-                self._npc_state = npcs
+            if self._replace(NPC_STATE, state):
+                self._npc_state = state
 
     def speech_done(self, conversation_id: str, seq: int) -> bool | None:
         """Whether the speech side has finished voicing line `seq` of this

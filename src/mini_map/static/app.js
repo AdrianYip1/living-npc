@@ -30,27 +30,46 @@
 // (read_seconds; the server paces NPC-to-NPC conversations by the same
 // number, see Simulation._on_conversation_turn). Each new line becomes a
 // speech bubble over its speaker, and NPC-to-NPC lines are also listed in
-// the "Overheard" panel. `talking_to` on each NPC links a conversing pair.
+// the "Activities" panel. `talking_to` on each NPC links a conversing pair.
 
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
 const GRID_SIZE = 48;
-const NPC_RADIUS = 32;
+const NPC_RADIUS = 24;
 const PLAYER_RADIUS = NPC_RADIUS;
 const INTERACT_RANGE = 120; // world units; how close the player must be to talk
 const MAP_SIZE = 1200; // world units, arbitrary for now
 const MAP_HALF = MAP_SIZE / 2;
-const MAX_SPEED = 260; // world px/sec
+const PLAYER_MAX_SPEED = 195; // world px/sec
+// Mirrors game_agents/world.py's NPC_MAX_SPEED (130 / WORLD_SCALE 6).
+const NPC_MAX_SPEED = 130; // world px/sec
 const ACCEL = 900; // px/sec^2 while a move key is held
 const DECEL = 1400; // px/sec^2 once keys are released
 // A traveler deciding what to do mid-walk slows to this fraction of
-// MAX_SPEED -- mirrors game_agents/world.py's HESITATE_SPEED_FACTOR.
+// NPC_MAX_SPEED -- mirrors game_agents/world.py's HESITATE_SPEED_FACTOR.
 const HESITATE_SPEED_FACTOR = 0.25;
 const PERSISTENT_NPC_COLOR = "#2196f3";
 const TRAVELER_COLOR = "#ff9800";
 const TRAVELER_FADE_SECONDS = 1.2;
 const GAME_BOUND = 100; // matches game_agents/world.py's MAP_MIN/MAX
 const WORLD_SCALE = MAP_HALF / GAME_BOUND; // backend coord -> canvas world unit
+// Static footprints of the 3D scene (models/scene_opt/background3.gltf), in
+// backend coords: the hut's outline (convex hull of its mesh, simplified)
+// and the island trees (the two island_tree_01s and the island_tree_02; the
+// scene's other trees are left off on purpose) -- trunk just above the roots,
+// canopy circle over the leaves' centroid, radius taking in 90% of the
+// leaves, i.e. about where the canopy visibly ends. Measured once from the
+// gltf; redo if the scene changes.
+const HUT_OUTLINE = [
+  [-94, -92], [-87, -99], [-54, -106], [-18, -65],
+  [-33, -38], [-40, -32], [-67, -21], [-104, -62],
+];
+const TREES = [
+  { trunk: [-88, -96], canopy: [-89, -87], radius: 44 }, // island_tree_01
+  { trunk: [82, -89], canopy: [83, -81], radius: 36 }, // island_tree_01
+  { trunk: [86, -68], canopy: [96, -59], radius: 20 }, // island_tree_02
+];
+const TRUNK_RADIUS = 3;
 const STATE_POLL_MS = 200;
 // Client-side smoothing of server-driven NPC positions (see applyState).
 const NPC_SNAP_DISTANCE = 60; // world units; bigger gaps than this just jump
@@ -67,7 +86,7 @@ const BUBBLE_TAIL = 8;
 const BUBBLE_LINGER_SECONDS = 1.5; // on top of the server's read_seconds
 const BUBBLE_FADE_SECONDS = 0.35;
 const BUBBLE_STACK_GAP = 6; // px between bubbles lifted clear of each other
-const OVERHEARD_MAX_LINES = 40;
+const ACTIVITIES_MAX_LINES = 40;
 
 const statusTime = document.getElementById("status-time");
 const statusWeather = document.getElementById("status-weather");
@@ -83,8 +102,10 @@ const conversationInput = document.getElementById("conversation-input");
 const conversationForm = document.getElementById("conversation-form");
 const conversationLog = document.getElementById("conversation-log");
 const proximityHint = document.getElementById("proximity-hint");
-const overheardEl = document.getElementById("overheard");
-const overheardLog = document.getElementById("overheard-log");
+const activitiesEl = document.getElementById("activities");
+const activitiesLog = document.getElementById("activities-log");
+const activitiesCount = document.getElementById("activities-count");
+const activitiesCollapse = document.getElementById("activities-collapse");
 
 const state = {
   paused: true,
@@ -208,6 +229,37 @@ function applyState(data) {
 
   logTravelerArrivals(data.traveler_arrivals || []);
   receiveSpeech(data.speech || []);
+  receiveInvite(data.player_invite || null);
+}
+
+// An NPC-started conversation with the player (see Simulation.
+// _invite_player): the server has already claimed the NPC, so the panel
+// just opens -- no /api/conversation/start. `invite.opening` is null until
+// the NPC's first line is ready, which can take a poll or two.
+let lastInviteId = null;
+let activeInvite = null; // { id, openingShown } while its panel is open
+
+function receiveInvite(invite) {
+  if (invite && invite.id !== lastInviteId) {
+    lastInviteId = invite.id;
+    const npc = npcs.find((entry) => entry.name === invite.name);
+    if (npc && !state.conversationOpen) {
+      showConversationPanel(npc);
+      appendLogLine(`${npc.name} comes over to talk to you.`, { system: true });
+      activeInvite = { id: invite.id, openingShown: false };
+    }
+  }
+  if (!activeInvite) return;
+  if (!invite || invite.id !== activeInvite.id) {
+    // Over on the server's side before it got going (the NPC acted
+    // instead of speaking), or ended some other way.
+    closeConversation();
+    return;
+  }
+  if (invite.opening && !activeInvite.openingShown) {
+    activeInvite.openingShown = true;
+    appendLogLine(`${invite.name}: ${invite.opening}`);
+  }
 }
 
 // Speaker name -> the bubble currently over their head. Times are on
@@ -232,12 +284,12 @@ function receiveSpeech(lines) {
     }
     if (line.kind === "trade") {
       // Narration, not speech: logged, but no bubble.
-      logOverheardNote(line.text, "trade");
+      logActivityNote(line.text, "trade");
       continue;
     }
     showBubble(line);
     if (line.listener !== "player") {
-      logOverheard(line);
+      logActivity(line);
     }
   }
   lastSpeechId = Math.max(lastSpeechId, maxId);
@@ -260,7 +312,7 @@ function showBubble(line) {
   }
 }
 
-function logOverheard(line) {
+function logActivity(line) {
   const row = document.createElement("div");
   row.className = "line";
   const who = document.createElement("span");
@@ -270,26 +322,40 @@ function logOverheard(line) {
   if (line.ends_conversation) {
     row.classList.add("goodbye");
   }
-  appendOverheardRow(row);
+  appendActivityRow(row);
 }
 
-// A line of narration in the Overheard panel -- a trade, an arrival --
+// A line of narration in the Activities panel -- a trade, an arrival --
 // rather than something someone said. `kind` becomes its CSS class.
-function logOverheardNote(text, kind) {
+function logActivityNote(text, kind) {
   const row = document.createElement("div");
   row.className = `line note ${kind}`;
   row.textContent = text;
-  appendOverheardRow(row);
+  appendActivityRow(row);
 }
 
-function appendOverheardRow(row) {
-  overheardLog.appendChild(row);
-  while (overheardLog.childElementCount > OVERHEARD_MAX_LINES) {
-    overheardLog.firstElementChild.remove();
+// Total logged, not just what's still in the (capped) log.
+let activityTotal = 0;
+
+function appendActivityRow(row) {
+  activityTotal += 1;
+  activitiesCount.textContent = activityTotal;
+  activitiesLog.appendChild(row);
+  while (activitiesLog.childElementCount > ACTIVITIES_MAX_LINES) {
+    activitiesLog.firstElementChild.remove();
   }
-  overheardEl.classList.remove("hidden");
-  overheardLog.scrollTop = overheardLog.scrollHeight;
+  activitiesEl.classList.remove("hidden");
+  activitiesLog.scrollTop = activitiesLog.scrollHeight;
 }
+
+activitiesCollapse.addEventListener("click", () => {
+  const collapsed = activitiesEl.classList.toggle("is-collapsed");
+  activitiesCollapse.setAttribute("aria-expanded", String(!collapsed));
+  activitiesCollapse.setAttribute("aria-label", collapsed ? "Expand activities" : "Collapse activities");
+  activitiesCollapse.title = collapsed ? "Expand" : "Collapse";
+  activitiesCollapse.blur(); // so Space keeps toggling pause, not this button
+  if (!collapsed) activitiesLog.scrollTop = activitiesLog.scrollHeight;
+});
 
 // Highest traveler_arrivals id already logged. null until the first poll,
 // which only records where the list stands -- otherwise a page reload
@@ -306,7 +372,7 @@ function logTravelerArrivals(arrivals) {
     if (arrival.id > lastTravelerId) {
       appendLogLine(`A traveler arrives at ${arrival.arrived_at}: ${arrival.identity.name}. ${arrival.identity.backstory}`, { system: true });
       const why = arrival.purpose ? `, ${arrival.purpose.summary}` : "";
-      logOverheardNote(`${arrival.identity.name} arrives in town${why}.`, "arrival");
+      logActivityNote(`${arrival.identity.name} arrives in town${why}.`, "arrival");
     }
   }
   lastTravelerId = Math.max(lastTravelerId, maxId);
@@ -580,11 +646,10 @@ function drawBubbles() {
   }
 }
 
-// A faint dashed link between each pair currently in conversation.
+// A faint solid link between each pair currently in conversation.
 function drawConversationLinks() {
   const byName = new Map(npcs.map((npc) => [npc.name, npc]));
   ctx.save();
-  ctx.setLineDash([3 / view.zoom, 4 / view.zoom]);
   ctx.lineWidth = 2 / view.zoom;
   ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
   for (const npc of npcs) {
@@ -600,8 +665,8 @@ function drawConversationLinks() {
   ctx.restore();
 }
 
-// Screen rect left clear by the status panel (right) and the Overheard
-// panel (left). Overheard's column is reserved even while it's hidden, so
+// Screen rect left clear by the status panel (right) and the Activities
+// panel (left). Its column is reserved even while it's hidden, so
 // the framing doesn't jump when the first NPC-to-NPC line reveals it --
 // read from its computed style, which still resolves under display: none.
 // The conversation box isn't avoided -- it's fine for it to cover the map
@@ -611,12 +676,12 @@ function overviewTarget() {
   let right = viewWidth;
   const status = statusPanel.getBoundingClientRect();
   if (status.width > 0) right = Math.min(right, status.left);
-  const overheardStyle = getComputedStyle(overheardEl);
-  const overheardRight = parseFloat(overheardStyle.left) + parseFloat(overheardStyle.width);
-  // On narrow screens Overheard spans the top instead of a side column;
+  const activitiesStyle = getComputedStyle(activitiesEl);
+  const activitiesRight = parseFloat(activitiesStyle.left) + parseFloat(activitiesStyle.width);
+  // On narrow screens Activities spans the top instead of a side column;
   // reserving its width there would leave no room for the map.
-  if (overheardRight < right - viewHeight * 0.5) {
-    left = Math.max(left, overheardRight);
+  if (activitiesRight < right - viewHeight * 0.5) {
+    left = Math.max(left, activitiesRight);
   }
   const availW = right - left - OVERVIEW_MARGIN * 2;
   const availH = viewHeight - OVERVIEW_MARGIN * 2;
@@ -663,6 +728,38 @@ function worldToScreen(x, y) {
   };
 }
 
+// The hut and trees, under everything else (see HUT_OUTLINE).
+function drawScenery() {
+  ctx.save();
+  ctx.lineWidth = 2 / view.zoom;
+
+  ctx.beginPath();
+  HUT_OUTLINE.forEach(([x, y], i) => {
+    if (i === 0) ctx.moveTo(x * WORLD_SCALE, y * WORLD_SCALE);
+    else ctx.lineTo(x * WORLD_SCALE, y * WORLD_SCALE);
+  });
+  ctx.closePath();
+  ctx.fillStyle = "rgba(161, 122, 74, 0.22)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(161, 122, 74, 0.6)";
+  ctx.stroke();
+
+  for (const tree of TREES) {
+    ctx.beginPath();
+    ctx.arc(tree.canopy[0] * WORLD_SCALE, tree.canopy[1] * WORLD_SCALE, tree.radius * WORLD_SCALE, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(76, 140, 74, 0.16)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(76, 140, 74, 0.45)";
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(tree.trunk[0] * WORLD_SCALE, tree.trunk[1] * WORLD_SCALE, TRUNK_RADIUS * WORLD_SCALE, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(110, 78, 48, 0.85)";
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawWorld(dt) {
   const width = viewWidth;
   const height = viewHeight;
@@ -702,6 +799,7 @@ function drawWorld(dt) {
     ctx.stroke();
   }
 
+  drawScenery();
   drawConversationLinks();
 
   for (const npc of npcs) {
@@ -758,9 +856,9 @@ function tick(now) {
       velocity.x += (dx / length) * ACCEL * dt;
       velocity.y += (dy / length) * ACCEL * dt;
       const speed = Math.hypot(velocity.x, velocity.y);
-      if (speed > MAX_SPEED) {
-        velocity.x = (velocity.x / speed) * MAX_SPEED;
-        velocity.y = (velocity.y / speed) * MAX_SPEED;
+      if (speed > PLAYER_MAX_SPEED) {
+        velocity.x = (velocity.x / speed) * PLAYER_MAX_SPEED;
+        velocity.y = (velocity.y / speed) * PLAYER_MAX_SPEED;
       }
     } else {
       const speed = Math.hypot(velocity.x, velocity.y);
@@ -805,9 +903,9 @@ function tick(now) {
 }
 
 // JS twin of game_agents/world.py's step_toward(), in canvas units: walk
-// toward `destination` (or brake to a stop if null) with the player's own
-// MAX_SPEED / ACCEL / DECEL, braking early enough to stop on the spot.
-function stepToward(body, destination, dt, maxSpeed = MAX_SPEED) {
+// toward `destination` (or brake to a stop if null) with NPC_MAX_SPEED and
+// the player's own ACCEL / DECEL, braking early enough to stop on the spot.
+function stepToward(body, destination, dt, maxSpeed = NPC_MAX_SPEED) {
   const speed = Math.hypot(body.vx, body.vy);
 
   if (!destination) {
@@ -852,7 +950,7 @@ function updateNpcs(dt) {
     // right down while deciding what to do (see Simulation's `deciding`).
     // Predicting a walk the server isn't doing means snapping back on
     // every poll.
-    const maxSpeed = npc.deciding ? MAX_SPEED * HESITATE_SPEED_FACTOR : MAX_SPEED;
+    const maxSpeed = npc.deciding ? NPC_MAX_SPEED * HESITATE_SPEED_FACTOR : NPC_MAX_SPEED;
     stepToward(npc, npc.busy ? null : npc.destination, dt, maxSpeed);
     npc.x += npc.errX * k;
     npc.y += npc.errY * k;
@@ -920,7 +1018,7 @@ async function postJSON(path, body) {
 // use, so a real conversation locks this NPC out of autonomous behavior
 // for as long as the panel stays open, exactly like being mid-exchange
 // with another NPC would.
-async function openConversation(npc) {
+function showConversationPanel(npc) {
   state.conversationOpen = true;
   conversationPartner = npc;
   conversationTarget.textContent = `Talking to ${npc.name}`;
@@ -928,6 +1026,10 @@ async function openConversation(npc) {
   proximityHint.classList.add("hidden");
   conversationLog.innerHTML = "";
   conversationInput.focus();
+}
+
+async function openConversation(npc) {
+  showConversationPanel(npc);
 
   let ok = false;
   try {
@@ -944,6 +1046,7 @@ async function openConversation(npc) {
 
 function closeConversation() {
   cancelDictation();
+  activeInvite = null;
   state.conversationOpen = false;
   const npc = conversationPartner;
   conversationPartner = null;

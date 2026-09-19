@@ -43,9 +43,14 @@
     </div>
   </aside>
 
-  <aside id="overheard" class="hidden" aria-live="polite">
-    <div class="overheard-title">Overheard</div>
-    <div id="overheard-log"></div>
+  <aside id="activities" class="hidden">
+    <div class="activities-header">
+      <span class="activities-title">Activities <span id="activities-count" class="activities-count">0</span></span>
+      <button id="activities-collapse" class="activities-collapse" type="button" aria-expanded="true" aria-controls="activities-log" aria-label="Collapse activities" title="Collapse">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10l4-4 4 4" /></svg>
+      </button>
+    </div>
+    <div id="activities-log" aria-live="polite"></div>
   </aside>
 
   <div id="conversation" class="hidden">

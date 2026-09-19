@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 from environment_agent.agent import EnvironmentAgent
+from environment_agent.travelers import spare_names
 
 from game_agents.agent import TurnResult
 from game_agents.identity import Identity
@@ -19,7 +20,7 @@ from game_agents.registry import NPCRegistry
 from game_agents.storage import save_identities
 from game_agents.world import HESITATE_SPEED_FACTOR, MAP_MAX, MAP_MIN, NPC_MAX_SPEED, PERSONAL_SPACE, distance
 
-from mini_map.simulation import Simulation
+from mini_map.simulation import Simulation, _renamed
 
 _COORDS = re.compile(r"\((-?\d+), (-?\d+)\)")
 
@@ -43,7 +44,7 @@ class _TravelerLLM:
             return MockLLMClient().complete(system=system, messages=messages, tools=tools)
         speak = next((t for t in tools if t["name"] == SPEAK_TOOL_NAME), None)
         # Only a traveler's prompt names an exit point.
-        if "exit point" in system:
+        if "way out of town" in system:
             self.stimuli.append(stimulus)
         if stimulus.startswith("You've just arrived"):
             x, y = _COORDS.findall(stimulus)[-1]  # the exit point
@@ -56,7 +57,9 @@ class _TravelerLLM:
         return LLMResult(tool_call=ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "hm"}))
 
 
-def _sim(tmp, llm, *, residents=(), places=(), **env_kwargs) -> Simulation:
+def _sim(tmp, llm, *, residents=(), places=(), memories=(), used_names_path=None, **env_kwargs) -> Simulation:
+    """`memories`: (resident, name) pairs -- the resident remembers meeting
+    `name`, as if in an earlier run."""
     npcs_path = Path(tmp) / "npcs.json"
     save_identities(
         [Identity(name=n, traits=[], backstory="", speech_style="", home=home) for n, home in residents], npcs_path
@@ -64,8 +67,10 @@ def _sim(tmp, llm, *, residents=(), places=(), **env_kwargs) -> Simulation:
     world_path = Path(tmp) / "world.json"
     world_path.write_text(json.dumps({"places": list(places)}), encoding="utf-8")
     registry = NPCRegistry(npcs_path, Path(tmp) / "memory", llm, world_path=world_path)
+    for resident, name in memories:
+        registry.get(resident).memory.add(f"{name} says: hello", importance=5, tags={name})
     env = EnvironmentAgent(**{"travelers_per_day": (1, 1), "start_minute": 0, "minutes_per_tick": 1440, "seed": 1, **env_kwargs})
-    return Simulation(registry, env, seed=3)
+    return Simulation(registry, env, seed=3, used_names_path=used_names_path)
 
 
 def _admit_one(sim: Simulation):
@@ -87,6 +92,84 @@ def _walk(sim: Simulation, seconds: float) -> None:
 
 def _on_edge(point) -> bool:
     return point[0] in (MAP_MIN, MAP_MAX) or point[1] in (MAP_MIN, MAP_MAX)
+
+
+class TravelerNameTests(unittest.TestCase):
+    """A taken name gets swapped for a different one -- never "Mara 2"."""
+
+    def _add(self, sim, identity, spares, used=()):
+        return sim._add_traveler_under_free_name(identity, list(spares), list(used), position=(0, 0))
+
+    def test_a_taken_name_becomes_a_spare_and_leaves_the_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = _sim(tmp, _TravelerLLM(), residents=[("Mara", (0, 0))])
+            mara = Identity(name="Mara", traits=[], backstory="Mara sells maps.", speech_style="", goals=["Help Mara's kin"])
+            identity, agent = self._add(sim, mara, ["Petra"])
+            self.assertEqual(identity.name, "Petra")
+            self.assertEqual(identity.backstory, "Petra sells maps.")
+            self.assertEqual(identity.goals, ["Help Petra's kin"])
+            self.assertIs(sim._registry.get("Petra"), agent)
+
+    def test_a_used_name_only_once_nothing_else_is_free(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = _sim(tmp, _TravelerLLM(), residents=[("Mara", (0, 0))])
+            identity, _ = self._add(sim, _identity("Mara"), ["Petra", "Wynne"], used=["Petra"])
+            self.assertEqual(identity.name, "Wynne")
+            identity, _ = self._add(sim, _identity("Wynne"), ["Petra"], used=["Petra"])
+            self.assertEqual(identity.name, "Petra")
+
+    def test_out_of_fresh_names_the_one_used_longest_ago_goes_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = _sim(tmp, _TravelerLLM(), residents=[("Mara", (0, 0))])
+            identity, _ = self._add(sim, _identity("Mara"), ["Wynne", "Petra"], used=["Petra", "Wynne"])
+            self.assertEqual(identity.name, "Petra")
+
+    def test_names_residents_remember_count_as_used(self):
+        # Osric came through in an earlier run; Mara still remembers him,
+        # so a new Osric would read as the same man back again.
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = _sim(tmp, _TravelerLLM(), residents=[("Mara", (0, 0)), ("Finn", (0, 0))],
+                       memories=[("Mara", "Osric"), ("Mara", "Finn"), ("Finn", "player"), ("Finn", "Odell 2")])
+            self.assertEqual(sorted(sim._used_names.names()), ["Odell", "Osric"])
+
+    def test_a_name_used_in_an_earlier_run_is_not_reused(self):
+        free = {"Elspeth", "Petra", "Garrick", "Lucan"}  # two of each gender
+        taken = [n for n in spare_names("female") + spare_names("male") if n not in free]
+        names = []
+        with tempfile.TemporaryDirectory() as tmp:
+            used_path = Path(tmp) / "traveler_names.json"
+            for run in range(2):  # same seeds, so the same sketch both times
+                with tempfile.TemporaryDirectory() as run_tmp:
+                    sim = _sim(run_tmp, _TravelerLLM(), residents=[(n, (0, 0)) for n in taken], used_names_path=used_path)
+                    traveler, _ = _admit_one(sim)
+                    names.append(traveler.identity.name)
+            self.assertEqual(json.loads(used_path.read_text(encoding="utf-8")), names)
+        self.assertNotEqual(names[0], names[1])
+        self.assertTrue(set(names) <= free)
+
+    def test_none_when_every_name_is_in_use(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = _sim(tmp, _TravelerLLM(), residents=[("Mara", (0, 0)), ("Petra", (0, 0))])
+            self.assertIsNone(self._add(sim, _identity("mara"), ["PETRA"]))
+
+    def test_an_arrival_whose_sketch_name_is_taken_gets_a_pool_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # Every pool name but one of each gender is a resident's.
+            free = {"Elspeth", "Garrick"}
+            taken = [n for n in spare_names("female") + spare_names("male") if n not in free]
+            sim = _sim(tmp, _TravelerLLM(), residents=[(n, (0, 0)) for n in taken])
+            traveler, _ = _admit_one(sim)
+            self.assertIn(traveler.identity.name, free)
+
+    def test_renamed_leaves_other_words_and_an_untouched_identity_alone(self):
+        ann = Identity(name="Ann", traits=[], backstory="Ann met Annabel.", speech_style="")
+        self.assertIs(_renamed(ann, "Ann"), ann)
+        self.assertEqual(_renamed(ann, "Wynne").backstory, "Wynne met Annabel.")
+        self.assertEqual(ann.name, "Ann")  # a copy, not changed in place
+
+
+def _identity(name: str) -> Identity:
+    return Identity(name=name, traits=[], backstory="", speech_style="")
 
 
 class TravelerAgentTests(unittest.TestCase):
@@ -111,7 +194,7 @@ class TravelerAgentTests(unittest.TestCase):
 
             self.assertIn(f"({st.exit_point[0]}, {st.exit_point[1]})", llm.stimuli[0])
             self.assertEqual(traveler.destination, st.exit_point)
-            self.assertIn(f"Your exit point: ({st.exit_point[0]}, {st.exit_point[1]})", traveler.standing_context)
+            self.assertIn(f"Your way out of town: ({st.exit_point[0]}, {st.exit_point[1]})", traveler.standing_context)
 
     def test_traveler_leaves_town_on_reaching_its_exit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -119,7 +202,7 @@ class TravelerAgentTests(unittest.TestCase):
             traveler, _ = _admit_one(sim)
             name = traveler.identity.name
 
-            _walk(sim, 15)  # the map is 200 units wide; NPC top speed is ~43/s
+            _walk(sim, 25)  # the map is 200 units wide; NPC top speed is ~22/s
 
             self.assertIsNone(sim._registry.get(name))
             self.assertNotIn(name, [npc["name"] for npc in sim.state()["npcs"]])

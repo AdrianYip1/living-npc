@@ -7,7 +7,7 @@ from .identity import Identity
 from .inventory import Inventory
 from .memory import MemoryStore
 
-_IDENTITY_FIELDS = ("name", "traits", "backstory", "speech_style", "goals", "home", "workplace", "habits", "starting_money", "starting_items", "gender")
+_IDENTITY_FIELDS = ("name", "traits", "backstory", "speech_style", "goals", "home", "workplace", "habits", "starting_money", "starting_items", "gender", "age", "appearance", "likes", "dislikes", "unfamiliar_with", "relationships")
 _COORD_FIELDS = ("home", "workplace")
 
 
@@ -71,7 +71,9 @@ def load_profile_template(path: str | Path, key: str = "profile_template") -> st
 
 def load_places(path: str | Path) -> list[dict]:
     """world.json's named places -- each {"name", "position": [x, y],
-    "description"}. Empty list if missing.
+    "description"}, plus optional "spots": [[x, y], ...], other coordinates
+    that are also inside the place (e.g. each resident's own corner of a
+    shared house). Empty list if missing.
     """
     p = Path(path)
     if not p.exists():
@@ -90,6 +92,93 @@ def render_places(places: list[dict]) -> str:
         for place in places
     ]
     return "Places in town you can walk to:\n" + "\n".join(lines)
+
+
+def load_town(path: str | Path) -> dict:
+    """world.json's town -- {"name", "about": [line, ...]}: what the
+    settlement is, that the listed places and people are all of it, and how
+    far off everything else is. Empty dict if missing.
+    """
+    p = Path(path)
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text(encoding="utf-8")).get("town", {})
+
+
+def render_town(town: dict) -> str:
+    """The prompt block every NPC (resident or traveler) sees ahead of the
+    places -- so the gaps between the listed places and people read as
+    empty, not as room to invent a market or a mayor.
+    """
+    about = town.get("about", [])
+    if not about:
+        return ""
+    return f"About {town.get('name', 'the town')}:\n" + "\n".join(f"- {line}" for line in about)
+
+
+def load_prices(path: str | Path) -> dict[str, int]:
+    """world.json's usual prices -- item name -> coins apiece. Empty dict
+    if missing.
+    """
+    p = Path(path)
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text(encoding="utf-8")).get("prices", {})
+
+
+def render_prices(prices: dict[str, int]) -> str:
+    """What things usually cost -- a reference to haggle from, not a rule:
+    buy_item / sell_item / sell_to_player take whatever total was agreed.
+    """
+    if not prices:
+        return ""
+    lines = [f"- {item}: {coins} coin{'s' if coins != 1 else ''}" for item, coins in prices.items()]
+    return (
+        "What things usually cost in town, per item (the only currency is coins):\n"
+        + "\n".join(lines)
+        + "\nA deal at a different price can happen, but not easily: only after real haggling or for a good "
+        "reason. Don't drop far below or ask far above these without one. For anything not listed, judge "
+        "by what's here."
+    )
+
+
+def render_residents(identities: list, places: list[dict]) -> str:
+    """Where each resident can usually be found -- general town knowledge,
+    not a live view: they move around, and look_around is how an NPC finds
+    out where someone actually is right now.
+    """
+    if not identities:
+        return ""
+    names = {
+        tuple(position): place["name"]
+        for place in places
+        for position in (place["position"], *place.get("spots", []))
+    }
+
+    def spot(position) -> str:
+        position = tuple(position)
+        name = names.get(position)
+        return f"{name} ({position[0]}, {position[1]})" if name else f"({position[0]}, {position[1]})"
+
+    lines = [f"- {i.name}: works at {spot(i.workplace)}; lives at {spot(i.home)}." for i in identities]
+    return (
+        "Where the townsfolk can usually be found (they move around, so they won't always be there):\n"
+        + "\n".join(lines)
+    )
+
+
+def load_player_names(path: str | Path) -> dict[str, str]:
+    """NPC name -> what that NPC knows the player as."""
+    p = Path(path)
+    if not p.exists():
+        return {}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def save_player_names(names: dict[str, str], path: str | Path) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(names, indent=2), encoding="utf-8")
 
 
 def load_memory(name: str, directory: str | Path) -> MemoryStore:

@@ -175,7 +175,7 @@ body {
   display: none !important;
 }
 
-#overheard {
+#activities {
   position: fixed;
   top: 16px;
   left: 16px;
@@ -194,14 +194,67 @@ body {
   font-size: 12px;
 }
 
-.overheard-title {
+.activities-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.activities-title {
   font-size: 11px;
   color: #999;
   text-transform: uppercase;
   letter-spacing: 0.02em;
 }
 
-#overheard-log {
+.activities-count {
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #ccc;
+  font-variant-numeric: tabular-nums;
+}
+
+.activities-collapse {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #999;
+  cursor: pointer;
+}
+
+.activities-collapse:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #eee;
+}
+
+.activities-collapse svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.15s ease;
+}
+
+#activities.is-collapsed .activities-collapse svg {
+  transform: rotate(180deg);
+}
+
+#activities.is-collapsed #activities-log {
+  display: none;
+}
+
+#activities-log {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -210,28 +263,28 @@ body {
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
-#overheard-log .line + .line {
+#activities-log .line + .line {
   margin-top: 4px;
 }
 
-#overheard-log .who {
+#activities-log .who {
   font-weight: bold;
   color: #9ecbff;
 }
 
-#overheard-log .goodbye {
+#activities-log .goodbye {
   color: #bbb;
 }
 
-#overheard-log .note {
+#activities-log .note {
   font-style: italic;
 }
 
-#overheard-log .arrival {
+#activities-log .arrival {
   color: #ffb74d;
 }
 
-#overheard-log .trade {
+#activities-log .trade {
   color: #a5d6a7;
 }
 
@@ -354,7 +407,7 @@ body {
     font-size: 12px;
   }
 
-  #overheard {
+  #activities {
     top: 12px;
     left: 12px;
     /* leaves room for the 120px status panel on the right */
