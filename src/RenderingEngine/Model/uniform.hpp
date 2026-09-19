@@ -32,7 +32,7 @@ namespace HTN {
 
 		void updateUniformBuffer(u32 currentImage, const UBO& ubo);
 		void updateLightBuffer(u32 currentImage, const LightUBO& light);
-		void updateWeightBuffer(u32 currentImage, const std::vector<f32>& weights);
+		void updateWeightBuffer(u32 currentImage, u32 headIndex, const std::vector<f32>& weights);
 		void updateJointBuffer(u32 currentImage, const std::vector<enginemath::Mat4>& palette);
 		std::vector<VkBuffer> getUniformBuffers() { return uniformBuffers; }
 		std::vector<VkBuffer> getLightUniformBuffers() { return lightUniformBuffers; }

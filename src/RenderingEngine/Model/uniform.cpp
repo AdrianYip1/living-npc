@@ -1,4 +1,5 @@
 #include "uniform.hpp"
+#include "../../npcConfig.hpp"
 
 HTN::Uniform::Uniform(Device& _device) : device(_device) {
 	createUniformBuffers();
@@ -20,8 +21,8 @@ HTN::Uniform::~Uniform() {
 void HTN::Uniform::createUniformBuffers() {
 	VkDeviceSize bufferSize = sizeof(UBO);
 	VkDeviceSize lightBufferSize = sizeof(LightUBO);
-	VkDeviceSize weightBufferSize = sizeof(f32) * MAX_WEIGHTS;
-	VkDeviceSize jointBufferSize = sizeof(enginemath::Mat4) * MAX_JOINTS;
+	VkDeviceSize weightBufferSize = sizeof(f32) * MAX_WEIGHTS * npcCount();
+	VkDeviceSize jointBufferSize = sizeof(enginemath::Mat4) * MAX_JOINTS * npcCount();
 
 	uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 	uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
@@ -75,8 +76,10 @@ void HTN::Uniform::updateLightBuffer(u32 currentImage, const LightUBO& light) {
 	memcpy(lightUniformBuffersMapped[currentImage], &light, sizeof(LightUBO));
 }
 
-void HTN::Uniform::updateWeightBuffer(u32 currentImage, const std::vector<f32>& weights) {
-	memcpy(weightStorageBuffersMapped[currentImage], weights.data(), sizeof(f32) * weights.size());
+void HTN::Uniform::updateWeightBuffer(u32 currentImage, u32 headIndex, const std::vector<f32>& weights) {
+	char* dst = static_cast<char*>(weightStorageBuffersMapped[currentImage])
+		+ headIndex * MAX_WEIGHTS * sizeof(f32);
+	memcpy(dst, weights.data(), sizeof(f32) * weights.size());
 }
 
 void HTN::Uniform::updateJointBuffer(u32 currentImage, const std::vector<enginemath::Mat4>& palette) {

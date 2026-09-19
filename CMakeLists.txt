@@ -72,7 +72,8 @@ add_executable(living_npc
     src/RenderingEngine/Core/input.cpp
     src/RenderingEngine/Core/cameraControls.cpp
     src/RenderingEngine/Utility/raycast.cpp
-    src/ProceduralAnimation/faceAnimator.cpp)
+    src/ProceduralAnimation/faceAnimator.cpp
+    src/outputText/parseOutput.cpp)
 
 add_custom_command(TARGET living_npc POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -81,6 +82,9 @@ add_custom_command(TARGET living_npc POST_BUILD
 add_dependencies(living_npc shaders)
 
 target_include_directories(living_npc PRIVATE src vendor)
+
+target_compile_definitions(living_npc PRIVATE
+    CONVO_LOG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/game_agents/data/conversation_log")
 
 target_link_libraries(living_npc PRIVATE
     enginemath::enginemath Vulkan::Vulkan glfw imgui)

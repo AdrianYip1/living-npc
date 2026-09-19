@@ -39,7 +39,8 @@ void HTN::Model::bind(VkCommandBuffer commandBuffer) {
 
 void HTN::Model::draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
 	const std::map<std::string, std::vector<VkDescriptorSet>>& materialSets,
-	u32 currentFrame, u32 weightBase, u32 jointBase) {
+	u32 currentFrame, const enginemath::Mat4& transform,
+	u32 weightBase, u32 jointBase) {
 	for (const submesh& s : model.primitives) {
 		auto it = materialSets.find(s.textureUri);
 		if (it == materialSets.end()) it = materialSets.find("");
@@ -48,7 +49,7 @@ void HTN::Model::draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLa
 			0, 1, &it->second[currentFrame], 0, nullptr);
 
 		MorphPush push{};
-		push.model = enginemath::Mat4::identity();
+		push.model = transform;
 		push.baseColor = s.baseColor;
 		push.morphStartIndex = s.morphStartIndex;
 		push.targetCount = s.targetCount;

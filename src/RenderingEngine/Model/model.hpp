@@ -134,7 +134,8 @@ namespace HTN {
 		void bind(VkCommandBuffer commandBuffer);
 		void draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
 				  const std::map<std::string, std::vector<VkDescriptorSet>>& materialSets,
-				  u32 currentFrame, u32 weightBase, u32 jointBase = 0);
+				  u32 currentFrame, const enginemath::Mat4& transform,
+				  u32 weightBase, u32 jointBase = 0);
 
 		const std::vector<submesh>& getPrimitives() const { return model.primitives; }
 

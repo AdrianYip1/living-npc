@@ -56,6 +56,7 @@ void HTN::Drawing::createCommandBuffer() {
 void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex,
 										const std::map<std::string, std::vector<VkDescriptorSet>>& materialSets,
 										u32 currentFrame, Model& model,
+										const std::vector<enginemath::Mat4>& npcTransforms,
 										Model* sceneModel, Pipeline* scenePipeline,
 										Pipeline* skyboxPipeline,
 										const std::vector<VkDescriptorSet>& skyboxSets) {
@@ -99,12 +100,16 @@ void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapch
 	if (sceneModel && scenePipeline) {
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scenePipeline->getGraphicsPipeline());
 		sceneModel->bind(commandBuffer);
-		sceneModel->draw(commandBuffer, scenePipeline->getPipelineLayout(), materialSets, currentFrame, 0);
+		sceneModel->draw(commandBuffer, scenePipeline->getPipelineLayout(), materialSets, currentFrame,
+						 enginemath::Mat4::identity(), 0);
 	}
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.getGraphicsPipeline());
 	model.bind(commandBuffer);
-	model.draw(commandBuffer, pipeline.getPipelineLayout(), materialSets, currentFrame, 0);
+	for (u32 h = 0; h < static_cast<u32>(npcTransforms.size()); h++) {
+		model.draw(commandBuffer, pipeline.getPipelineLayout(), materialSets, currentFrame,
+				   npcTransforms[h], h * MAX_WEIGHTS, h * MAX_JOINTS);
+	}
 
 	if (skyboxPipeline && !skyboxSets.empty()) {
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline->getGraphicsPipeline());
