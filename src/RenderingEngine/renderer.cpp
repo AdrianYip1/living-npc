@@ -1,4 +1,12 @@
 #include "renderer.hpp"
+#include "Model/modelLoading.hpp"
+
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
+#include <GLFW/glfw3.h>
+
+#include <enginemath/mat4.hpp>
 
 HTN::Renderer::Renderer(Window& _window) :
 	window(_window),
@@ -7,20 +15,22 @@ HTN::Renderer::Renderer(Window& _window) :
 	drawing(device, pipeline),
 	uniform(device) {
 
-	std::vector<Vertex> vertices = {
-		{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
-		{{ 0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
-		{{ 0.5f,  0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-		{{-0.5f,  0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-	};
-	std::vector<u32> indices = {0, 1, 2, 2, 3, 0};
+	std::vector<Vertex> vertices;
+	std::vector<u32> indices;
+	Loader::loadModel("models/face1.gltf", vertices, indices);
 
 	Model::createModel(device, vertices, indices, &model);
 	createDescriptors();
+	initImGui();
 	createSyncObjects();
 }
 
 HTN::Renderer::~Renderer() {
+	ImGui_ImplVulkan_Shutdown();
+	ImGui_ImplGlfw_Shutdown();
+	ImGui::DestroyContext();
+
+	vkDestroyDescriptorPool(device.getDevice(), imguiPool, nullptr);
 	vkDestroyDescriptorPool(device.getDevice(), descriptorPool, nullptr);
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -51,7 +61,26 @@ void HTN::Renderer::drawFrame() {
 	vkResetCommandBuffer(drawing.getCommandBuffer(currentFrame), 0);
 
 	UBO ubo{};
+	ubo.view = enginemath::Mat4::lookAtM(
+		enginemath::Vec3(0.0f, 1.56f, 0.5f),
+		enginemath::Vec3(0.0f, 1.56f, 0.0f),
+		enginemath::Vec3(0.0f, 1.0f, 0.0f));
+
+	f32 aspect = static_cast<f32>(device.getExtent().width) / static_cast<f32>(device.getExtent().height);
+	ubo.proj = enginemath::Mat4::projectionM(0.7854f, aspect, 0.1f, 100.0f);
+
 	uniform.updateUniformBuffer(currentFrame, ubo);
+
+	ImGui_ImplVulkan_NewFrame();
+	ImGui_ImplGlfw_NewFrame();
+	ImGui::NewFrame();
+
+	ImGui::Begin("Living NPC");
+	ImGui::Text("Face Model Loaded");
+	ImGui::Text("Vertices: %d", model.getIndexCount());
+	ImGui::End();
+
+	ImGui::Render();
 
 	drawing.recordCommandBuffer(drawing.getCommandBuffer(currentFrame), swapchainImageIndex,
 								descriptorSets[currentFrame], model);
@@ -136,6 +165,49 @@ void HTN::Renderer::createDescriptors() {
 		{uniform.getUniformBuffers()},
 		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
 		descriptorSets);
+}
+
+void HTN::Renderer::initImGui() {
+	VkDescriptorPoolSize poolSizes[] = {
+		{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 10},
+		{VK_DESCRIPTOR_TYPE_SAMPLER, 10},
+		{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 10}
+	};
+
+	VkDescriptorPoolCreateInfo poolInfo{};
+	poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+	poolInfo.maxSets = 10;
+	poolInfo.poolSizeCount = 3;
+	poolInfo.pPoolSizes = poolSizes;
+
+	if (vkCreateDescriptorPool(device.getDevice(), &poolInfo, nullptr, &imguiPool) != VK_SUCCESS) {
+		throw std::runtime_error("ERROR: Failed to create ImGui descriptor pool");
+	}
+
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGui::StyleColorsDark();
+
+	ImGui_ImplGlfw_InitForVulkan(window.getWindow(), true);
+
+	QueueFamilyIndices queueIndices = device.findQueueFamilies(device.getPhysicalDevice());
+
+	ImGui_ImplVulkan_InitInfo initInfo{};
+	initInfo.ApiVersion = VK_API_VERSION_1_0;
+	initInfo.Instance = device.getInstance();
+	initInfo.PhysicalDevice = device.getPhysicalDevice();
+	initInfo.Device = device.getDevice();
+	initInfo.QueueFamily = queueIndices.graphicsAndComputeFamily.value();
+	initInfo.Queue = device.getGraphicsQueue();
+	initInfo.DescriptorPool = imguiPool;
+	initInfo.MinImageCount = 2;
+	initInfo.ImageCount = static_cast<u32>(device.getSwapchainImageViews().size());
+	initInfo.PipelineInfoMain.RenderPass = pipeline.getRenderpass();
+	initInfo.PipelineInfoMain.Subpass = 0;
+	initInfo.PipelineInfoMain.MSAASamples = device.getMSAASampleCount();
+
+	ImGui_ImplVulkan_Init(&initInfo);
 }
 
 void HTN::Renderer::wait() {

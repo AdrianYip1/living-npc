@@ -12,8 +12,10 @@ layout(binding = 0) uniform UniformBufferObject {
 } ubo;
 
 layout(location = 0) out vec3 fragColor;
+layout(location = 1) out vec3 fragNormal;
 
 void main() {
     gl_Position = ubo.proj * ubo.view * ubo.model * vec4(inPosition, 1.0);
     fragColor = inColor;
+    fragNormal = mat3(ubo.model) * inNormal;
 }

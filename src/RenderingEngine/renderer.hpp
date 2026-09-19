@@ -8,7 +8,6 @@
 #include "descriptor.hpp"
 #include "Model/model.hpp"
 #include "Model/uniform.hpp"
-#include "Model/texture.hpp"
 #include "Platform/window.hpp"
 
 namespace HTN {
@@ -31,6 +30,7 @@ namespace HTN {
 		Model model;
 
 		VkDescriptorPool descriptorPool;
+		VkDescriptorPool imguiPool;
 		std::vector<VkDescriptorSet> descriptorSets;
 
 		u32 currentFrame = 0;
@@ -41,5 +41,6 @@ namespace HTN {
 
 		void createSyncObjects();
 		void createDescriptors();
+		void initImGui();
 	};
 } // namespace HTN

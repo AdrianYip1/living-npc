@@ -1,4 +1,6 @@
 #include "drawing.hpp"
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
 
 HTN::Drawing::Drawing(Device& _device, Pipeline& _pipeline) :
 	device(_device), pipeline(_pipeline) {
@@ -95,6 +97,8 @@ void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapch
 							pipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
 	model.bind(commandBuffer);
 	model.draw(commandBuffer);
+
+	ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
 
 	vkCmdEndRenderPass(commandBuffer);
 

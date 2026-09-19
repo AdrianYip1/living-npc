@@ -66,7 +66,12 @@ add_executable(living_npc
     src/RenderingEngine/descriptor.cpp
     src/RenderingEngine/Model/model.cpp
     src/RenderingEngine/Model/uniform.cpp
-    src/RenderingEngine/Model/texture.cpp)
+    src/RenderingEngine/Model/texture.cpp
+    src/RenderingEngine/Model/modelLoading.cpp)
+
+add_custom_command(TARGET living_npc POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_CURRENT_SOURCE_DIR}/models ${CMAKE_BINARY_DIR}/models)
 
 add_dependencies(living_npc shaders)
 
