@@ -4,6 +4,7 @@
 #include "../defines.hpp"
 #include "device.hpp"
 #include "pipeline.hpp"
+#include "Model/model.hpp"
 
 #include <vector>
 #include <array>
@@ -18,7 +19,8 @@ namespace HTN {
 
 		std::vector<VkFramebuffer>& getFramebuffers() { return swapchainFramebuffers; }
 		VkCommandBuffer getCommandBuffer(u32 frame) { return commandBuffers[frame]; }
-		void recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex);
+		void recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex,
+							 VkDescriptorSet descriptorSet, Model& model);
 		void createFramebuffer();
 
 	private:

@@ -51,7 +51,8 @@ void HTN::Drawing::createCommandBuffer() {
 	}
 }
 
-void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex) {
+void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex,
+										VkDescriptorSet descriptorSet, Model& model) {
 	VkCommandBufferBeginInfo beginInfo{};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -90,7 +91,10 @@ void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapch
 	vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.getGraphicsPipeline());
-	vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+							pipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+	model.bind(commandBuffer);
+	model.draw(commandBuffer);
 
 	vkCmdEndRenderPass(commandBuffer);
 

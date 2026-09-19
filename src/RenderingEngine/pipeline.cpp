@@ -1,4 +1,5 @@
 #include "pipeline.hpp"
+#include "Model/model.hpp"
 
 HTN::Pipeline::Pipeline(Device& _device, const std::string& _vertPath, const std::string& _fragPath) :
 	device(_device), vertPath(_vertPath), fragPath(_fragPath) {
@@ -7,6 +8,7 @@ HTN::Pipeline::Pipeline(Device& _device, const std::string& _vertPath, const std
 }
 
 HTN::Pipeline::~Pipeline() {
+	vkDestroyDescriptorSetLayout(device.getDevice(), uboSetLayout, nullptr);
 	vkDestroyPipeline(device.getDevice(), graphicsPipeline, nullptr);
 	vkDestroyPipelineLayout(device.getDevice(), pipelineLayout, nullptr);
 	vkDestroyRenderPass(device.getDevice(), renderpass, nullptr);
@@ -107,10 +109,15 @@ void HTN::Pipeline::createGraphicsPipeline() {
 	shaderCreateInfo[1].module = fragModule;
 	shaderCreateInfo[1].pName = "main";
 
+	auto bindingDescription = Vertex::getBindingDescription();
+	auto attributeDescriptions = Vertex::getAttributeDescriptions();
+
 	VkPipelineVertexInputStateCreateInfo vertexInputCreateInfo{};
 	vertexInputCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-	vertexInputCreateInfo.vertexBindingDescriptionCount = 0;
-	vertexInputCreateInfo.vertexAttributeDescriptionCount = 0;
+	vertexInputCreateInfo.vertexBindingDescriptionCount = 1;
+	vertexInputCreateInfo.pVertexBindingDescriptions = &bindingDescription;
+	vertexInputCreateInfo.vertexAttributeDescriptionCount = static_cast<u32>(attributeDescriptions.size());
+	vertexInputCreateInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
 	VkPipelineInputAssemblyStateCreateInfo inputAssemblyCreateInfo{};
 	inputAssemblyCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -166,9 +173,16 @@ void HTN::Pipeline::createGraphicsPipeline() {
 	colorBlendingCreateInfo.attachmentCount = 1;
 	colorBlendingCreateInfo.pAttachments = &colorBlendAttachment;
 
+	Descriptor::createDescriptorSetLayout(device,
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+		{VK_SHADER_STAGE_VERTEX_BIT},
+		{0},
+		uboSetLayout);
+
 	VkPipelineLayoutCreateInfo layoutCreateInfo{};
 	layoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	layoutCreateInfo.setLayoutCount = 0;
+	layoutCreateInfo.setLayoutCount = 1;
+	layoutCreateInfo.pSetLayouts = &uboSetLayout;
 	layoutCreateInfo.pushConstantRangeCount = 0;
 
 	if (vkCreatePipelineLayout(device.getDevice(), &layoutCreateInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {

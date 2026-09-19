@@ -4,11 +4,25 @@ HTN::Renderer::Renderer(Window& _window) :
 	window(_window),
 	device(_window),
 	pipeline(device, "shaders/shader.vert.spv", "shaders/shader.frag.spv"),
-	drawing(device, pipeline) {
+	drawing(device, pipeline),
+	uniform(device) {
+
+	std::vector<Vertex> vertices = {
+		{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+		{{ 0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+		{{ 0.5f,  0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+		{{-0.5f,  0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+	};
+	std::vector<u32> indices = {0, 1, 2, 2, 3, 0};
+
+	Model::createModel(device, vertices, indices, &model);
+	createDescriptors();
 	createSyncObjects();
 }
 
 HTN::Renderer::~Renderer() {
+	vkDestroyDescriptorPool(device.getDevice(), descriptorPool, nullptr);
+
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 		vkDestroySemaphore(device.getDevice(), imageAvailableSemaphores[i], nullptr);
 		vkDestroyFence(device.getDevice(), inFlightFences[i], nullptr);
@@ -36,7 +50,11 @@ void HTN::Renderer::drawFrame() {
 	vkResetFences(device.getDevice(), 1, &inFlightFences[currentFrame]);
 	vkResetCommandBuffer(drawing.getCommandBuffer(currentFrame), 0);
 
-	drawing.recordCommandBuffer(drawing.getCommandBuffer(currentFrame), swapchainImageIndex);
+	UBO ubo{};
+	uniform.updateUniformBuffer(currentFrame, ubo);
+
+	drawing.recordCommandBuffer(drawing.getCommandBuffer(currentFrame), swapchainImageIndex,
+								descriptorSets[currentFrame], model);
 
 	VkSubmitInfo submitInfo{};
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -105,6 +123,19 @@ void HTN::Renderer::createSyncObjects() {
 			throw std::runtime_error("ERROR: Failed to create synchronization object");
 		}
 	}
+}
+
+void HTN::Renderer::createDescriptors() {
+	Descriptor::createDescriptorPool(device,
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+		descriptorPool);
+
+	Descriptor::createDescriptorSets(device,
+		pipeline.getUboSetLayout(),
+		descriptorPool,
+		{uniform.getUniformBuffers()},
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+		descriptorSets);
 }
 
 void HTN::Renderer::wait() {

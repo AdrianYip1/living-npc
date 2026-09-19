@@ -62,7 +62,10 @@ add_executable(living_npc
     src/RenderingEngine/Helpers/image.cpp
     src/RenderingEngine/pipeline.cpp
     src/RenderingEngine/drawing.cpp
-    src/RenderingEngine/renderer.cpp)
+    src/RenderingEngine/renderer.cpp
+    src/RenderingEngine/descriptor.cpp
+    src/RenderingEngine/Model/model.cpp
+    src/RenderingEngine/Model/uniform.cpp)
 
 add_dependencies(living_npc shaders)
 

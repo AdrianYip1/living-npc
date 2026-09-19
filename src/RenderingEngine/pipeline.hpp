@@ -3,6 +3,7 @@
 
 #include "../defines.hpp"
 #include "device.hpp"
+#include "descriptor.hpp"
 
 #include <fstream>
 #include <array>
@@ -11,18 +12,15 @@
 namespace HTN {
 	class Pipeline {
 	public:
-
-		// TODO: will probably need mutiple pipeline ctors for different things like rendering
-		// the scene, hdri (sky?), npcs, etc
 		Pipeline(Device& _device, const std::string& vertPath, const std::string& fragPath);
 		~Pipeline();
 		Pipeline(const Pipeline&) = delete;
 		Pipeline& operator=(const Pipeline&) = delete;
 
-		// getters
 		VkPipelineLayout getPipelineLayout() { return pipelineLayout; }
 		VkPipeline getGraphicsPipeline() { return graphicsPipeline; }
 		VkRenderPass getRenderpass() { return renderpass; }
+		VkDescriptorSetLayout& getUboSetLayout() { return uboSetLayout; }
 
 	private:
 		Device& device;
@@ -32,6 +30,7 @@ namespace HTN {
 		VkPipelineLayout pipelineLayout;
 		VkRenderPass renderpass;
 		VkPipeline graphicsPipeline;
+		VkDescriptorSetLayout uboSetLayout;
 
 		void createRenderPass();
 		void createGraphicsPipeline();
