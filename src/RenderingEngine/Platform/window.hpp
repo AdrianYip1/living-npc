@@ -14,6 +14,8 @@ namespace HTN {
 		Window& operator=(const Window& other) = delete;
 
 		GLFWwindow* getWindow();
+		u32 getWidth() const { return W; }
+		u32 getHeight() const { return H; }
 		void initWindow();
 		bool checkClose();
 		void pollWindowEvents();

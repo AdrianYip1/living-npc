@@ -98,9 +98,9 @@ int main() {
 		}
 		std::cout << "Server ready." << std::endl;
 
-		HTN::Window window(1600, 900, "Living Npc: Face Model");
+		HTN::Window window(0, 0, "Living Npc: Face Model");
 		HTN::Camera camera(enginemath::Vec3(0.0f, 1.56f, 0.5f),
-						   1600.0f / 900.0f);
+						   static_cast<float>(window.getWidth()) / window.getHeight());
 		HTN::Renderer renderer(window, camera);
 		HTN::Clock clock;
 		HTN::Input input(window);
