@@ -13,6 +13,8 @@ namespace HTN {
 	class Pipeline {
 	public:
 		Pipeline(Device& _device, const std::string& vertPath, const std::string& fragPath);
+		Pipeline(Device& _device, const std::string& vertPath, const std::string& fragPath,
+				 VkRenderPass sharedRenderPass, VkDescriptorSetLayout sharedLayout);
 		~Pipeline();
 		Pipeline(const Pipeline&) = delete;
 		Pipeline& operator=(const Pipeline&) = delete;
@@ -31,6 +33,9 @@ namespace HTN {
 		VkRenderPass renderpass;
 		VkPipeline graphicsPipeline;
 		VkDescriptorSetLayout uboSetLayout;
+
+		bool ownsRenderPass = true;
+		bool ownsLayout = true;
 
 		void createRenderPass();
 		void createGraphicsPipeline();

@@ -7,11 +7,19 @@ HTN::Pipeline::Pipeline(Device& _device, const std::string& _vertPath, const std
 	createGraphicsPipeline();
 }
 
+HTN::Pipeline::Pipeline(Device& _device, const std::string& _vertPath, const std::string& _fragPath,
+						 VkRenderPass sharedRenderPass, VkDescriptorSetLayout sharedLayout) :
+	device(_device), vertPath(_vertPath), fragPath(_fragPath),
+	renderpass(sharedRenderPass), uboSetLayout(sharedLayout),
+	ownsRenderPass(false), ownsLayout(false) {
+	createGraphicsPipeline();
+}
+
 HTN::Pipeline::~Pipeline() {
-	vkDestroyDescriptorSetLayout(device.getDevice(), uboSetLayout, nullptr);
+	if (ownsLayout) vkDestroyDescriptorSetLayout(device.getDevice(), uboSetLayout, nullptr);
 	vkDestroyPipeline(device.getDevice(), graphicsPipeline, nullptr);
 	vkDestroyPipelineLayout(device.getDevice(), pipelineLayout, nullptr);
-	vkDestroyRenderPass(device.getDevice(), renderpass, nullptr);
+	if (ownsRenderPass) vkDestroyRenderPass(device.getDevice(), renderpass, nullptr);
 }
 
 void HTN::Pipeline::createRenderPass() {
@@ -173,17 +181,19 @@ void HTN::Pipeline::createGraphicsPipeline() {
 	colorBlendingCreateInfo.attachmentCount = 1;
 	colorBlendingCreateInfo.pAttachments = &colorBlendAttachment;
 
-	Descriptor::createDescriptorSetLayout(device,
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-		{VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
-		 VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_VERTEX_BIT,
-		 VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
-		 VK_SHADER_STAGE_VERTEX_BIT},
-		{0, 1, 2, 3, 4, 5, 6},
-		uboSetLayout);
+	if (ownsLayout) {
+		Descriptor::createDescriptorSetLayout(device,
+			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+			{VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+			 VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_VERTEX_BIT,
+			 VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+			 VK_SHADER_STAGE_VERTEX_BIT},
+			{0, 1, 2, 3, 4, 5, 6},
+			uboSetLayout);
+	}
 
 	VkPushConstantRange pushConstant{};
 	pushConstant.offset = 0;
