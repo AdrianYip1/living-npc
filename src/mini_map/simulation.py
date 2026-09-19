@@ -827,7 +827,7 @@ class Simulation:
             name = agent.identity.name
             if math.hypot(*agent.velocity) > 1.0:
                 self._facing[name] = agent.velocity
-            entries.append(npc_state_entry(slot, agent.position, self._facing.get(name, (0.0, 1.0))))
+            entries.append(npc_state_entry(slot, agent.position, self._facing.get(name, (0.0, 1.0)), name=name))
         self._exporter.write_npc_state(entries)
 
     def _refuse_conversation(self, initiator: str, target: str) -> str | None:
