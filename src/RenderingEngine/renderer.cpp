@@ -12,6 +12,9 @@
 #include <fstream>
 #include <chrono>
 #include <cstring>
+#include <future>
+#include <vector>
+#include <iostream>
 
 HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	window(_window),
@@ -262,22 +265,42 @@ void HTN::Renderer::createSyncObjects() {
 }
 
 void HTN::Renderer::createTextures() {
+	struct TextureJob { std::string key; std::string path; };
+	std::vector<TextureJob> jobs;
+
 	for (const submesh& s : model.getPrimitives()) {
 		if (!s.textureUri.empty() && textures.find(s.textureUri) == textures.end()) {
-			std::string path = "models/" + s.textureUri;
-			textures[s.textureUri] = std::make_unique<Texture>(device, path);
+			textures[s.textureUri] = nullptr;
+			jobs.push_back({s.textureUri, "models/" + s.textureUri});
 		}
 	}
 	if (hasScene) {
 		for (const submesh& s : sceneModel.getPrimitives()) {
 			if (!s.textureUri.empty() && textures.find(s.textureUri) == textures.end()) {
-				std::string path = "models/scene_opt/" + s.textureUri;
-				textures[s.textureUri] = std::make_unique<Texture>(device, path);
+				textures[s.textureUri] = nullptr;
+				jobs.push_back({s.textureUri, "models/scene_opt/" + s.textureUri});
 			}
 		}
 	}
 	if (textures.find("") == textures.end()) {
-		textures[""] = std::make_unique<Texture>(device, "models/white.png");
+		textures[""] = nullptr;
+		jobs.push_back({"", "models/white.png"});
+	}
+
+	std::vector<std::future<DecodedImage>> futures;
+	futures.reserve(jobs.size());
+	for (const auto& job : jobs) {
+		std::string p = job.path;
+		futures.push_back(std::async(std::launch::async, [p] {
+			return DecodedImage::fromFile(p);
+		}));
+	}
+
+	for (size_t i = 0; i < jobs.size(); i++) {
+		DecodedImage decoded = futures[i].get();
+		if (!decoded)
+			throw std::runtime_error("ERROR: Failed to load texture image: " + jobs[i].path);
+		textures[jobs[i].key] = std::make_unique<Texture>(device, std::move(decoded));
 	}
 }
 
