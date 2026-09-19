@@ -70,8 +70,8 @@ void HTN::Renderer::drawFrame() {
 	presentInfo.pImageIndices = &swapchainImageIndex;
 
 	result = vkQueuePresentKHR(device.getPresentQueue(), &presentInfo);
-	if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
-		framebufferResized = false;
+	if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || window.getFramebufferResized()) {
+		window.setFramebufferResized(false);
 		device.recreateSwapchain();
 		drawing.createFramebuffer();
 	}

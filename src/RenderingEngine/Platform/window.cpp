@@ -25,6 +25,9 @@ void HTN::Window::initWindow() {
 	if (!window) {
 		throw std::runtime_error("ERROR: Failed to create window");
 	}
+
+	glfwSetWindowUserPointer(window, this);
+	glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 }
 
 bool HTN::Window::checkClose() {
@@ -33,4 +36,13 @@ bool HTN::Window::checkClose() {
 
 void HTN::Window::pollWindowEvents() {
 	glfwPollEvents();
+}
+
+void HTN::Window::setFramebufferResized(bool b) {
+	framebufferResized = b;
+}
+
+void HTN::Window::framebufferResizeCallback(GLFWwindow* window, int w, int h) {
+	auto app = reinterpret_cast<Window*>(glfwGetWindowUserPointer(window));
+	app->framebufferResized = true;
 }

@@ -18,10 +18,16 @@ namespace HTN {
 		bool checkClose();
 		void pollWindowEvents();
 
+		bool getFramebufferResized() { return framebufferResized; }
+		void setFramebufferResized(bool b);
+
 	private:
 		GLFWwindow* window = nullptr;
 		u32 W;
 		u32 H;
 		const char* TITLE;
+		bool framebufferResized = false;
+
+		static void framebufferResizeCallback(GLFWwindow* window, int w, int h);
 	};
 } // namespace HTN

@@ -30,8 +30,6 @@ namespace HTN {
 		std::vector<VkSemaphore> renderFinishedSemaphores;
 		std::vector<VkFence> inFlightFences;
 
-		bool framebufferResized = false;
-
 		void createSyncObjects();
 	};
 } // namespace HTN
