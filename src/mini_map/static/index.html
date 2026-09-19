@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>living-npc mini-map</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="map"></canvas>
+
+  <aside id="status-panel">
+    <div class="status-row">
+      <span id="status-time" class="value">--</span>
+    </div>
+    <div class="status-row">
+      <span id="status-weather" class="value">--</span>
+    </div>
+    <div class="status-row">
+      <span id="status-speed" class="value">1x</span>
+    </div>
+    <div class="status-row">
+      <span id="status-playstate" class="value">Paused</span>
+    </div>
+    <div class="status-row">
+      <span id="status-mic" class="value">Off</span>
+    </div>
+  </aside>
+
+  <div id="conversation" class="hidden">
+    <div id="conversation-target"></div>
+    <div id="conversation-log"></div>
+    <form id="conversation-form" autocomplete="off">
+      <textarea id="conversation-input" rows="1" placeholder="Type to talk to an NPC..."></textarea>
+      <button type="submit">Send</button>
+    </form>
+  </div>
+
+  <div id="proximity-hint" class="hidden">Press <kbd>E</kbd> to talk</div>
+
+  <script src="app.js"></script>
+</body>
+</html>

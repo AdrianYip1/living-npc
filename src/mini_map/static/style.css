@@ -1,0 +1,191 @@
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #111;
+  color: #eee;
+  font-family: system-ui, sans-serif;
+  overflow: hidden;
+}
+
+#map {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  background: #1a1a1a;
+  z-index: 0;
+  transition: filter 0.15s ease;
+}
+
+#map.paused {
+  filter: brightness(0.6) saturate(0.5);
+}
+
+#status-panel {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1;
+  width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(20, 20, 20, 0.78);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+}
+
+.status-row {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 6px;
+}
+
+.status-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.status-row .value {
+  font-weight: bold;
+}
+
+#status-mic.active {
+  color: #4caf50;
+}
+
+.hidden {
+  display: none !important;
+}
+
+#proximity-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 1;
+  background: rgba(20, 20, 20, 0.78);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: #ddd;
+}
+
+#proximity-hint kbd {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+#conversation-target {
+  font-size: 12px;
+  font-weight: bold;
+  color: #ccc;
+}
+
+#conversation {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: 1;
+  width: min(640px, calc(100vw - 40px));
+  max-height: 32vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(15, 15, 15, 0.8);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 12px 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+#conversation-log {
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 32px;
+}
+
+#conversation-log .line {
+  white-space: pre-wrap;
+}
+
+#conversation-log .line.system {
+  color: #999;
+  font-style: italic;
+}
+
+#conversation-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+#conversation-input {
+  flex: 1;
+  resize: none;
+  overflow-y: hidden;
+  max-height: 140px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  color: #eee;
+  font: inherit;
+  padding: 8px 10px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+#conversation-input:focus {
+  outline: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+#conversation-form button {
+  flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: #eee;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+#conversation-form button:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+@media (max-width: 480px) {
+  #status-panel {
+    top: 12px;
+    right: 12px;
+    width: 120px;
+    padding: 8px 10px;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  #conversation {
+    bottom: 12px;
+    width: calc(100vw - 24px);
+    max-height: 40vh;
+  }
+}
