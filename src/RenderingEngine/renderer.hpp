@@ -8,6 +8,7 @@
 #include "descriptor.hpp"
 #include "Model/model.hpp"
 #include "Model/uniform.hpp"
+#include "Model/texture.hpp"
 #include "Platform/window.hpp"
 
 namespace HTN {
