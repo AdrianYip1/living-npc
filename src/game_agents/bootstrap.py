@@ -10,7 +10,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .llm import AnthropicLLMClient, DeepSeekLLMClient, LLMClient
+from .llm import AnthropicLLMClient, DeepSeekLLMClient, LLMClient, OpenAILLMClient
 from .registry import NPCRegistry
 
 load_dotenv(Path(__file__).parent / ".env")
@@ -33,6 +33,7 @@ CONVERSATION_MAX_TURNS = 15
 _BACKENDS: dict[str, type[LLMClient]] = {
     "anthropic": AnthropicLLMClient,
     "deepseek": DeepSeekLLMClient,
+    "openai": OpenAILLMClient,
 }
 
 
