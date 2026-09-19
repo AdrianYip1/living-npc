@@ -1,0 +1,36 @@
+[
+  {
+    "name": "Mara",
+    "gender": "female",
+    "traits": ["gruff", "loyal", "quick to laugh"],
+    "backstory": "Runs the town's only blacksmith shop, inherited from her mother.",
+    "speech_style": "short sentences, dry humor",
+    "goals": ["finish the order for the mayor's gate hinges"],
+    "home": [-40, 15],
+    "workplace": [12, -30],
+    "habits": [
+      "Leaves home for the forge shortly after sunrise",
+      "Works at the forge most of the day",
+      "Heads home once the light starts to fade"
+    ],
+    "starting_money": 40,
+    "starting_items": {"iron ingot": 6, "horseshoe": 4, "hammer": 1}
+  },
+  {
+    "name": "Finn",
+    "gender": "male",
+    "traits": ["curious", "chatty", "a little nervous"],
+    "backstory": "The town's fisherman, spends more time talking to travelers than fishing.",
+    "speech_style": "friendly and casual, dockside slang",
+    "goals": ["find someone willing to trade for a spare net"],
+    "home": [55, -20],
+    "workplace": [70, 45],
+    "habits": [
+      "Walks down to the docks early to catch the morning tide",
+      "Lingers at the docks talking to whoever passes through",
+      "Wanders back home in the evening, usually with a late catch"
+    ],
+    "starting_money": 12,
+    "starting_items": {"fish": 5, "fishing rod": 1, "torn net": 1}
+  }
+]

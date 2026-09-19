@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "living-npc"
+version = "0.0.1"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["src/game_agents/requirements.txt"] }
+
+[tool.setuptools.packages.find]
+where = ["src"]
