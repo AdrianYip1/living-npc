@@ -59,6 +59,11 @@ namespace {
 		return out;
 	}
 
+	float lerpAngle(float from, float to, float t) {
+		float diff = fmodf(to - from + 3.0f * 3.14159265f, 2.0f * 3.14159265f) - 3.14159265f;
+		return from + diff * t;
+	}
+
 	int findNearestNPC(const enginemath::Vec3& playerPos,
 					   const std::vector<enginemath::Vec3>& npcPositions) {
 		int nearest = -1;
@@ -120,7 +125,10 @@ int main() {
 		std::vector<bool> npcMoving(renderer.faceCount(), false);
 		std::vector<std::string> npcNames(renderer.faceCount());
 		std::vector<enginemath::Vec3> npcWorldPositions(renderer.faceCount());
+		std::vector<float> npcCurrentRot(renderer.faceCount(), 0.0f);
+		std::vector<float> npcTargetRot(renderer.faceCount(), 0.0f);
 
+		HTN::Clock dtClock;
 		bool talkKeyWasDown = false;
 		std::string talkingToNPC;
 		bool playerConversationActive = false;
@@ -211,10 +219,7 @@ int main() {
 								float nz = npc.value("z", 0.5f);
 								HTN::f32 wx = bounds.toWorldX(nx);
 								HTN::f32 wz = bounds.toWorldZ(nz);
-								HTN::f32 rot = npc.value("rot", 0.0f);
-								renderer.setNPCTransform(slot,
-									enginemath::Mat4::translationM(wx, 0.0f, wz)
-									* enginemath::Mat4::rotateY(rot));
+								npcTargetRot[slot] = npc.value("rot", 0.0f);
 
 								npcNames[slot] = npc.value("name", "");
 								npcWorldPositions[slot] = {wx, 0.0f, wz};
@@ -232,6 +237,12 @@ int main() {
 				pollClock.resetTime();
 			}
 
+			float dt = dtClock.elapsedMs() / 1000.0f;
+			dtClock.resetTime();
+			const float turnSpeed = 5.0f;
+			float t = turnSpeed * dt;
+			if (t > 1.0f) t = 1.0f;
+
 			for (HTN::u32 s = 0; s < renderer.faceCount(); s++) {
 				if (npcMoving[s])
 					renderer.setNPCAnimState(s, HTN::AnimState::WALK);
@@ -239,6 +250,17 @@ int main() {
 					renderer.setNPCAnimState(s, HTN::AnimState::TALK);
 				else
 					renderer.setNPCAnimState(s, HTN::AnimState::IDLE);
+
+				float goal = npcTargetRot[s];
+				if (playerConversationActive && npcNames[s] == talkingToNPC) {
+					enginemath::Vec3 cam = camera.getPos();
+					enginemath::Vec3 npc = npcWorldPositions[s];
+					goal = atan2f(cam.x - npc.x, cam.z - npc.z);
+				}
+				npcCurrentRot[s] = lerpAngle(npcCurrentRot[s], goal, t);
+				renderer.setNPCTransform(s,
+					enginemath::Mat4::translationM(npcWorldPositions[s].x, 0.0f, npcWorldPositions[s].z)
+					* enginemath::Mat4::rotateY(npcCurrentRot[s]));
 			}
 
 			if (inFlight && !renderer.anyBusy()) {
