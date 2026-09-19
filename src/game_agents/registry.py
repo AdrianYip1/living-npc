@@ -7,7 +7,7 @@ from pathlib import Path
 from .agent import Agent
 from .conversation import ConversationHooks, conversation_recap, run_conversation, save_transcript
 from .identity import DEFAULT_PROFILE_TEMPLATE
-from .inventory import TradeError, trade
+from .inventory import Inventory, TradeError, trade
 from .llm import LLMClient
 from .identity import Identity
 from .memory import MemoryStore
@@ -17,9 +17,13 @@ from .storage import (
     load_inventory,
     load_memory,
     load_places,
+    load_prices,
+    load_town,
     load_profile_template,
     load_player_names,
     render_places,
+    render_prices,
+    render_town,
     render_residents,
     save_inventory,
     save_player_names,
@@ -133,7 +137,13 @@ class NPCRegistry:
         # Public so the simulation can pick a place for a traveler to visit.
         self.places = load_places(world_path) if world_path else []
         identities = load_identities(npcs_path)
-        places_context = render_places(self.places)
+        # The town, its places, and the usual prices: knowledge everyone --
+        # resident or traveler -- starts out with.
+        town = load_town(world_path) if world_path else {}
+        prices = load_prices(world_path) if world_path else {}
+        places_context = "\n\n".join(
+            part for part in (render_town(town), render_places(self.places), render_prices(prices)) if part
+        )
         self._world_context = "\n\n".join(
             part for part in (places_context, render_residents(identities, self.places)) if part
         )
@@ -163,6 +173,7 @@ class NPCRegistry:
             npc_tools.register(self._make_note_player_name_tool(identity.name))
             npc_tools.register(self._make_trade_tool(identity.name, buying=True))
             npc_tools.register(self._make_trade_tool(identity.name, buying=False))
+            npc_tools.register(self._make_sell_to_player_tool(identity.name))
             self._agents[identity.name] = Agent(
                 identity,
                 llm,
@@ -233,6 +244,9 @@ class NPCRegistry:
         tools.register(self._make_move_tool(name))
         tools.register(self._make_initiate_conversation_tool(name, self._conversation_turns))
         tools.register(self._make_trade_tool(name, buying=True))
+        # Buying means knowing what you can pay -- without it a traveler
+        # agreed to deals it couldn't cover.
+        tools.register(self._make_check_inventory_tool(name))
         tools.register(make_wait_tool())
         tools.register(self._make_note_player_name_tool(name))
         agent = Agent(
@@ -577,8 +591,8 @@ class NPCRegistry:
             tool_name, verb, counterparty_desc = "buy_item", "Buy an item from", "The name of the NPC you're buying from."
             requirement = "they actually have the item, you actually have the coins,"
         else:
-            tool_name, verb, counterparty_desc = "sell_item", "Sell one of your items to", "The name of the NPC you're selling to."
-            requirement = "you actually have the item, they actually have the coins,"
+            tool_name, verb, counterparty_desc = "sell_item", "Sell one of the items you're carrying to", "The name of the NPC you're selling to."
+            requirement = "you actually have the item (goods only -- you don't sell services), they actually have the coins,"
 
         return Tool(
             name=tool_name,
@@ -601,6 +615,62 @@ class NPCRegistry:
                 "required": ["item", counterparty_field, "total_price"],
             },
             handler=handler,
+        )
+
+    def _make_sell_to_player_tool(self, name: str) -> Tool:
+        """sell_item's counterpart for the player, who has no inventory:
+        they're assumed to have the coins (the NPC is told to go with that
+        unless the player says otherwise), so only the seller's side is
+        checked. Informational, so the NPC still gets to say something --
+        a turn spent only on the sale would leave the player with no reply.
+        That also means respond() won't remember it, so the sale goes into
+        memory here.
+        """
+
+        def handler(item: str, total_price: int, quantity: int = 1) -> str:
+            agent = self._agents.get(name)
+            if agent is None:
+                return "You've already left town."
+            quantity, total_price = int(quantity), int(total_price)
+            with self._trade_lock:
+                try:
+                    item = trade(
+                        buyer=Inventory(money=total_price),
+                        seller=agent.inventory,
+                        item=item,
+                        quantity=quantity,
+                        total_price=total_price,
+                        buyer_name="the player",
+                        seller_name="You",
+                    )
+                except TradeError as e:
+                    return f"The sale didn't go through: {e}"
+            sale = f"You sold {quantity} x {item} to {agent.player_label()} for {total_price} coins."
+            agent.memory.add(sale, importance=7, tags={"player"})
+            return f"{sale} {agent.inventory.describe()}"
+
+        return Tool(
+            name="sell_to_player",
+            description=(
+                "Sell the player one of the items you're carrying, once you've both agreed on the item and "
+                "price out loud. Assume they can pay unless they've said they can't. Goods only -- you don't "
+                "sell services. You'll still get to say something after."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "item": {"type": "string", "description": "The name of the item being sold."},
+                    "total_price": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Total coins for the whole deal (not per item).",
+                    },
+                    "quantity": {"type": "integer", "minimum": 1, "description": "How many of the item. Defaults to 1."},
+                },
+                "required": ["item", "total_price"],
+            },
+            handler=handler,
+            informational=True,
         )
 
     def _range_error(self, name: str, other: Agent, verb: str) -> str | None:

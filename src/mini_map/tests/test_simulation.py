@@ -58,6 +58,7 @@ class _CountingLLM:
 _NPCS_JSON_KEYS = (
     "name", "traits", "backstory", "speech_style", "goals",
     "home", "workplace", "habits", "starting_money", "starting_items", "gender",
+    "age", "appearance", "likes", "dislikes", "unfamiliar_with", "relationships",
 )
 
 

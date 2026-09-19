@@ -71,12 +71,12 @@ class TravelerPurpose:
         if self.kind == SOCIALIZE:
             return (
                 f"You've stopped in town to spend some time at {self.place_label}: rest, catch up on news, "
-                "and chat with whoever's around -- an hour or two, not all day. Then head for your exit point."
+                "and chat with whoever's around -- an hour or two, not all day. Then head for your way out of town."
             )
         if self.kind == BUY:
             return (
                 f"You've stopped in town to buy {self.item} from {self.seller}, who works at {self.place_label}. "
-                f"Find {self.seller}, agree on a price out loud, then use buy_item. Once you have it, head for your exit point."
+                f"Find {self.seller}, agree on a price out loud, then use buy_item. Once you have it, head for your way out of town."
             )
         return (
             "You're just passing through on your way somewhere else -- there's nowhere in town you need to stop, "

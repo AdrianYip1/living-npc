@@ -44,7 +44,7 @@ class _TravelerLLM:
             return MockLLMClient().complete(system=system, messages=messages, tools=tools)
         speak = next((t for t in tools if t["name"] == SPEAK_TOOL_NAME), None)
         # Only a traveler's prompt names an exit point.
-        if "exit point" in system:
+        if "way out of town" in system:
             self.stimuli.append(stimulus)
         if stimulus.startswith("You've just arrived"):
             x, y = _COORDS.findall(stimulus)[-1]  # the exit point
@@ -194,7 +194,7 @@ class TravelerAgentTests(unittest.TestCase):
 
             self.assertIn(f"({st.exit_point[0]}, {st.exit_point[1]})", llm.stimuli[0])
             self.assertEqual(traveler.destination, st.exit_point)
-            self.assertIn(f"Your exit point: ({st.exit_point[0]}, {st.exit_point[1]})", traveler.standing_context)
+            self.assertIn(f"Your way out of town: ({st.exit_point[0]}, {st.exit_point[1]})", traveler.standing_context)
 
     def test_traveler_leaves_town_on_reaching_its_exit(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,14 +2,22 @@
   {
     "name": "Mara",
     "gender": "female",
+    "age": 43,
+    "appearance": "Broad-shouldered, grey-streaked hair cropped short, forearms scarred from sparks, always in a scorched leather apron.",
     "traits": ["gruff", "loyal", "quick to laugh"],
-    "backstory": "Runs the town's only blacksmith forge, set up in the open under the big tree beside her hut, inherited from her mother. Rents the back room of her hut to Finn.",
+    "backstory": "Runs the town's only blacksmith forge, set up in the open under the big tree on the east side of town, inherited from her mother. Rents a room of her hut to Finn.",
+    "likes": ["good iron", "a customer who pays the asking price", "a quiet evening after a long day at the anvil"],
+    "dislikes": ["rain on an open forge", "haggling", "idle chatter while she's working"],
+    "unfamiliar_with": ["herbs and remedies", "anywhere more than a day's walk from town"],
+    "relationships": {
+      "Finn": "your lodger, who rents a room in your hut. Talks far too much and you tell him so, but you're fond of him and would never say it."
+    },
     "speech_style": "short sentences, dry humor",
-    "goals": ["finish the order for the mayor's gate hinges"],
-    "home": [-62, -64],
-    "workplace": [-98, -84],
+    "goals": ["sell enough horseshoes and tools to buy more iron before her stock runs low"],
+    "home": [-40, -12],
+    "workplace": [78, -76],
     "habits": [
-      "Steps out to the forge under the big tree shortly after sunrise",
+      "Walks across town to the forge under the east tree shortly after sunrise",
       "Works at the forge most of the day",
       "Goes back inside the hut once the light starts to fade"
     ],
@@ -19,11 +27,19 @@
   {
     "name": "Finn",
     "gender": "male",
+    "age": 24,
+    "appearance": "Lanky and sunburnt, grass stains on his knees, a woven basket always on his arm.",
     "traits": ["curious", "chatty", "a little nervous"],
-    "backstory": "The town's forager and herbalist. Gathers herbs, mushrooms, and berries out in the meadow and makes simple remedies, though he spends more time talking to travelers than gathering. Lodges in the back room of Mara's hut.",
+    "backstory": "The town's forager and herbalist. Gathers herbs, mushrooms, and berries out in the meadow and makes simple remedies, though he spends more time talking to travelers than gathering. Lodges in a room of Mara's hut.",
+    "likes": ["hearing travelers' stories about faraway places", "finding a rare mushroom", "sunny mornings"],
+    "dislikes": ["being rushed", "the hammer ringing out at dawn", "silence"],
+    "unfamiliar_with": ["smithing and metalwork", "anywhere more than a day's walk from town"],
+    "relationships": {
+      "Mara": "your landlady; you rent a room in her hut. Gruff, but you'd trust her with anything."
+    },
     "speech_style": "friendly and casual, short lines",
     "goals": ["sell his healing salves to travelers passing through"],
-    "home": [-62, -64],
+    "home": [-12, -40],
     "workplace": [-50, 50],
     "habits": [
       "Heads out to the meadow early, while the dew is still on the herbs",

@@ -11,7 +11,11 @@ _FALLBACK = Identity(name="Odell", traits=["weary"], backstory="fallback", speec
 
 _GOOD_ARGUMENTS = {
     "name": "Selwyn",
+    "age": 38,
+    "appearance": "Ink-stained fingers and a battered satchel.",
     "traits": ["wry", "patient"],
+    "likes": ["a clear horizon"],
+    "dislikes": ["getting lost"],
     "backstory": "A cartographer mapping the coast road.",
     "speech_style": "precise, dry",
     "goals": ["finish the map"],
@@ -44,6 +48,20 @@ class GenerateTravelerIdentityTests(unittest.TestCase):
         self.assertEqual(identity.starting_items, {"map": 1, "ink": 2})
         # No home in town -- carried over from the fallback, not invented.
         self.assertEqual(identity.home, _FALLBACK.home)
+
+    def test_keeps_the_personal_details(self):
+        llm = _FixedLLM(CREATE_IDENTITY_TOOL_NAME, _GOOD_ARGUMENTS)
+        identity = generate_traveler_identity(llm, "brief", fallback=_FALLBACK)
+
+        self.assertEqual((identity.age, identity.likes, identity.dislikes), (38, ["a clear horizon"], ["getting lost"]))
+        self.assertEqual(identity.relationships, {})  # knows no one here
+
+    def test_bad_personal_details_are_dropped_not_the_identity(self):
+        arguments = {**_GOOD_ARGUMENTS, "age": -4, "appearance": 7, "likes": [1, 2]}
+        identity = generate_traveler_identity(_FixedLLM(CREATE_IDENTITY_TOOL_NAME, arguments), "brief", fallback=_FALLBACK)
+
+        self.assertEqual(identity.name, "Selwyn")
+        self.assertEqual((identity.age, identity.appearance, identity.likes), (0, "", []))
 
     def test_result_round_trips_through_the_npcs_json_format(self):
         llm = _FixedLLM(CREATE_IDENTITY_TOOL_NAME, _GOOD_ARGUMENTS)

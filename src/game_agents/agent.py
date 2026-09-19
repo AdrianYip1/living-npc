@@ -48,8 +48,9 @@ CONVERSATION_HIDDEN_ACTIONS = frozenset({"initiate_conversation"})
 CONVERSATION_ONLY_ACTIONS = frozenset({"buy_item", "sell_item"})
 
 # Only offered while talking with the player (see respond()'s
-# `with_player`): noting their name makes no sense with anyone else.
-PLAYER_ONLY_ACTIONS = frozenset({"note_player_name"})
+# `with_player`): noting their name, or selling to them, makes no sense
+# with anyone else.
+PLAYER_ONLY_ACTIONS = frozenset({"note_player_name", "sell_to_player"})
 
 
 @dataclass

@@ -20,8 +20,10 @@ log = logging.getLogger(__name__)
 
 CREATE_IDENTITY_TOOL_NAME = "create_identity"
 
-# Every Identity field except home/workplace: a traveler lives nowhere in
-# town, so those stay at whatever the fallback identity carries.
+# Every Identity field except home/workplace -- a traveler lives nowhere in
+# town, so those stay at whatever the fallback identity carries -- and
+# relationships / unfamiliar_with: they know no one here, and what's
+# outside their field is left to the model.
 CREATE_IDENTITY_TOOL_SCHEMA: dict[str, Any] = {
     "name": CREATE_IDENTITY_TOOL_NAME,
     "description": "Create the full identity of a traveler arriving in town.",
@@ -30,7 +32,11 @@ CREATE_IDENTITY_TOOL_SCHEMA: dict[str, Any] = {
         "properties": {
             "name": {"type": "string", "description": "First name only, one word."},
             "gender": {"type": "string", "enum": ["male", "female"]},
+            "age": {"type": "integer", "description": "Age in years."},
+            "appearance": {"type": "string", "description": "What someone sees at a glance, in one short sentence."},
             "traits": {"type": "array", "items": {"type": "string"}, "description": "2-4 short personality traits."},
+            "likes": {"type": "array", "items": {"type": "string"}, "description": "1-2 things they enjoy."},
+            "dislikes": {"type": "array", "items": {"type": "string"}, "description": "1-2 things they can't stand."},
             "backstory": {"type": "string", "description": "One or two sentences: who they are and why they're here."},
             "speech_style": {"type": "string", "description": "How they talk, in a few words."},
             "goals": {"type": "array", "items": {"type": "string"}, "description": "1-2 things they want during this visit."},
@@ -60,7 +66,11 @@ CREATE_IDENTITY_TOOL_SCHEMA: dict[str, Any] = {
         "required": [
             "name",
             "gender",
+            "age",
+            "appearance",
             "traits",
+            "likes",
+            "dislikes",
             "backstory",
             "speech_style",
             "goals",
@@ -132,7 +142,7 @@ def _parse(arguments: dict[str, Any], fallback: Identity) -> Identity | None:
     record = {key: arguments[key] for key in fields if key in arguments}
     # Backends without strict tool use (DeepSeek) still sometimes send a
     # list as one "a, b, c" string -- close enough to take.
-    for key in ("traits", "goals", "habits"):
+    for key in ("traits", "goals", "habits", "likes", "dislikes"):
         if isinstance(record.get(key), str):
             record[key] = [part.strip() for part in record[key].replace(";", ",").split(",") if part.strip()]
     items = record.get("starting_items")
@@ -171,4 +181,12 @@ def _parse(arguments: dict[str, Any], fallback: Identity) -> Identity | None:
     # whole identity over -- the sketch's gender stands in.
     gender = identity.gender.strip().lower() if isinstance(identity.gender, str) else ""
     identity.gender = gender if gender in ("male", "female") else fallback.gender
+    # Flavor, same as gender: a bad value is just left unstated.
+    if not (isinstance(identity.age, int) and 0 < identity.age < 120):
+        identity.age = 0
+    if not isinstance(identity.appearance, str):
+        identity.appearance = ""
+    for key in ("likes", "dislikes"):
+        if not is_str_list(getattr(identity, key)):
+            setattr(identity, key, [])
     return identity

@@ -30,7 +30,7 @@
 // (read_seconds; the server paces NPC-to-NPC conversations by the same
 // number, see Simulation._on_conversation_turn). Each new line becomes a
 // speech bubble over its speaker, and NPC-to-NPC lines are also listed in
-// the "Overheard" panel. `talking_to` on each NPC links a conversing pair.
+// the "Activities" panel. `talking_to` on each NPC links a conversing pair.
 
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
@@ -86,7 +86,7 @@ const BUBBLE_TAIL = 8;
 const BUBBLE_LINGER_SECONDS = 1.5; // on top of the server's read_seconds
 const BUBBLE_FADE_SECONDS = 0.35;
 const BUBBLE_STACK_GAP = 6; // px between bubbles lifted clear of each other
-const OVERHEARD_MAX_LINES = 40;
+const ACTIVITIES_MAX_LINES = 40;
 
 const statusTime = document.getElementById("status-time");
 const statusWeather = document.getElementById("status-weather");
@@ -102,8 +102,10 @@ const conversationInput = document.getElementById("conversation-input");
 const conversationForm = document.getElementById("conversation-form");
 const conversationLog = document.getElementById("conversation-log");
 const proximityHint = document.getElementById("proximity-hint");
-const overheardEl = document.getElementById("overheard");
-const overheardLog = document.getElementById("overheard-log");
+const activitiesEl = document.getElementById("activities");
+const activitiesLog = document.getElementById("activities-log");
+const activitiesCount = document.getElementById("activities-count");
+const activitiesCollapse = document.getElementById("activities-collapse");
 
 const state = {
   paused: true,
@@ -282,12 +284,12 @@ function receiveSpeech(lines) {
     }
     if (line.kind === "trade") {
       // Narration, not speech: logged, but no bubble.
-      logOverheardNote(line.text, "trade");
+      logActivityNote(line.text, "trade");
       continue;
     }
     showBubble(line);
     if (line.listener !== "player") {
-      logOverheard(line);
+      logActivity(line);
     }
   }
   lastSpeechId = Math.max(lastSpeechId, maxId);
@@ -310,7 +312,7 @@ function showBubble(line) {
   }
 }
 
-function logOverheard(line) {
+function logActivity(line) {
   const row = document.createElement("div");
   row.className = "line";
   const who = document.createElement("span");
@@ -320,26 +322,40 @@ function logOverheard(line) {
   if (line.ends_conversation) {
     row.classList.add("goodbye");
   }
-  appendOverheardRow(row);
+  appendActivityRow(row);
 }
 
-// A line of narration in the Overheard panel -- a trade, an arrival --
+// A line of narration in the Activities panel -- a trade, an arrival --
 // rather than something someone said. `kind` becomes its CSS class.
-function logOverheardNote(text, kind) {
+function logActivityNote(text, kind) {
   const row = document.createElement("div");
   row.className = `line note ${kind}`;
   row.textContent = text;
-  appendOverheardRow(row);
+  appendActivityRow(row);
 }
 
-function appendOverheardRow(row) {
-  overheardLog.appendChild(row);
-  while (overheardLog.childElementCount > OVERHEARD_MAX_LINES) {
-    overheardLog.firstElementChild.remove();
+// Total logged, not just what's still in the (capped) log.
+let activityTotal = 0;
+
+function appendActivityRow(row) {
+  activityTotal += 1;
+  activitiesCount.textContent = activityTotal;
+  activitiesLog.appendChild(row);
+  while (activitiesLog.childElementCount > ACTIVITIES_MAX_LINES) {
+    activitiesLog.firstElementChild.remove();
   }
-  overheardEl.classList.remove("hidden");
-  overheardLog.scrollTop = overheardLog.scrollHeight;
+  activitiesEl.classList.remove("hidden");
+  activitiesLog.scrollTop = activitiesLog.scrollHeight;
 }
+
+activitiesCollapse.addEventListener("click", () => {
+  const collapsed = activitiesEl.classList.toggle("is-collapsed");
+  activitiesCollapse.setAttribute("aria-expanded", String(!collapsed));
+  activitiesCollapse.setAttribute("aria-label", collapsed ? "Expand activities" : "Collapse activities");
+  activitiesCollapse.title = collapsed ? "Expand" : "Collapse";
+  activitiesCollapse.blur(); // so Space keeps toggling pause, not this button
+  if (!collapsed) activitiesLog.scrollTop = activitiesLog.scrollHeight;
+});
 
 // Highest traveler_arrivals id already logged. null until the first poll,
 // which only records where the list stands -- otherwise a page reload
@@ -356,7 +372,7 @@ function logTravelerArrivals(arrivals) {
     if (arrival.id > lastTravelerId) {
       appendLogLine(`A traveler arrives at ${arrival.arrived_at}: ${arrival.identity.name}. ${arrival.identity.backstory}`, { system: true });
       const why = arrival.purpose ? `, ${arrival.purpose.summary}` : "";
-      logOverheardNote(`${arrival.identity.name} arrives in town${why}.`, "arrival");
+      logActivityNote(`${arrival.identity.name} arrives in town${why}.`, "arrival");
     }
   }
   lastTravelerId = Math.max(lastTravelerId, maxId);
@@ -649,8 +665,8 @@ function drawConversationLinks() {
   ctx.restore();
 }
 
-// Screen rect left clear by the status panel (right) and the Overheard
-// panel (left). Overheard's column is reserved even while it's hidden, so
+// Screen rect left clear by the status panel (right) and the Activities
+// panel (left). Its column is reserved even while it's hidden, so
 // the framing doesn't jump when the first NPC-to-NPC line reveals it --
 // read from its computed style, which still resolves under display: none.
 // The conversation box isn't avoided -- it's fine for it to cover the map
@@ -660,12 +676,12 @@ function overviewTarget() {
   let right = viewWidth;
   const status = statusPanel.getBoundingClientRect();
   if (status.width > 0) right = Math.min(right, status.left);
-  const overheardStyle = getComputedStyle(overheardEl);
-  const overheardRight = parseFloat(overheardStyle.left) + parseFloat(overheardStyle.width);
-  // On narrow screens Overheard spans the top instead of a side column;
+  const activitiesStyle = getComputedStyle(activitiesEl);
+  const activitiesRight = parseFloat(activitiesStyle.left) + parseFloat(activitiesStyle.width);
+  // On narrow screens Activities spans the top instead of a side column;
   // reserving its width there would leave no room for the map.
-  if (overheardRight < right - viewHeight * 0.5) {
-    left = Math.max(left, overheardRight);
+  if (activitiesRight < right - viewHeight * 0.5) {
+    left = Math.max(left, activitiesRight);
   }
   const availW = right - left - OVERVIEW_MARGIN * 2;
   const availH = viewHeight - OVERVIEW_MARGIN * 2;

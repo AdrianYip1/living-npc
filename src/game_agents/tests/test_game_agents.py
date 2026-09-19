@@ -97,6 +97,25 @@ class IdentityProfileTests(unittest.TestCase):
         self.assertIn("Workplace: (0, 0)", block)
         self.assertIn("Habits: none", block)
 
+    def test_prompt_block_includes_personal_details(self):
+        identity = _identity("Mara")
+        identity.age, identity.appearance = 43, "Soot on her arms."
+        identity.likes, identity.dislikes = ["good iron"], ["rain", "haggling"]
+        identity.unfamiliar_with = ["herbs"]
+        identity.relationships = {"Finn": "your lodger."}
+        block = identity.prompt_block()
+
+        self.assertIn("Age: 43\nAppearance: Soot on her arms.", block)
+        self.assertIn("Likes: good iron\nDislikes: rain, haggling", block)
+        self.assertIn("(you know little about these): herbs", block)
+        self.assertIn("People you know: Finn -- your lodger.", block)
+
+    def test_unset_personal_details_read_as_unknown_not_blank(self):
+        block = _identity("Mara").prompt_block()
+
+        self.assertIn("Age: unknown", block)
+        self.assertIn("People you know: no one here yet", block)
+
 
 class WorldBoundsTests(unittest.TestCase):
     def test_clamp_leaves_in_range_values_untouched(self):
@@ -202,6 +221,35 @@ class WorldContextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             context = render_places(load_places(self._write_world(tmp)))
             self.assertIn("The Forge at (12, -30): Hot and loud.", context)
+
+    def test_the_town_comes_before_its_places(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._write_world(tmp)
+            town = {"name": "Tallbough", "about": ["Tiny.", "Nothing else is here."]}
+            world.write_text(json.dumps({"town": town, **json.loads(world.read_text(encoding="utf-8"))}), encoding="utf-8")
+            npcs_path = Path(tmp) / "npcs.json"
+            save_identities([_identity("A")], npcs_path)
+            registry = NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient(), world_path=world)
+            traveler = registry.add_traveler(_identity("T"), position=(0, 0))
+
+            for agent in (registry.get("A"), traveler):
+                prompt = agent._build_system_prompt(Scene(), [])
+                self.assertIn("About Tallbough:\n- Tiny.\n- Nothing else is here.", prompt)
+                self.assertLess(prompt.index("About Tallbough"), prompt.index("The Forge at"))
+
+    def test_usual_prices_go_to_everyone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._write_world(tmp)
+            world.write_text(json.dumps({"places": [], "prices": {"horseshoe": 3, "twine": 1}}), encoding="utf-8")
+            npcs_path = Path(tmp) / "npcs.json"
+            save_identities([_identity("A")], npcs_path)
+            registry = NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient(), world_path=world)
+            traveler = registry.add_traveler(_identity("T"), position=(0, 0))
+
+            for agent in (registry.get("A"), traveler):
+                prompt = agent._build_system_prompt(Scene(), [])
+                self.assertIn("- horseshoe: 3 coins\n- twine: 1 coin", prompt)
+                self.assertIn("not easily", prompt)
 
     def test_missing_world_file_returns_empty_string(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -497,6 +545,7 @@ class InitiateConversationToolTests(unittest.TestCase):
                     "note_player_name",
                     "buy_item",
                     "sell_item",
+                    "sell_to_player",
                     "wave",
                 },
             )
@@ -723,6 +772,19 @@ class WhereaboutsTests(unittest.TestCase):
             self.assertNotIn(finn_line, finn_prompt)
 
 
+    def test_a_place_spot_names_a_home_off_its_position(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "world.json"
+            hut = {"name": "The Hut", "position": [5, 5], "spots": [[0, 0], [-90, 90]], "description": "Shared."}
+            world.write_text(json.dumps({"places": [hut]}), encoding="utf-8")
+            registry = self._registry(tmp, world_path=world)
+
+            prompt = registry.add_traveler(_identity("T"), position=(0, 0))._build_system_prompt(Scene(), [])
+            self.assertIn("- Mara: works at (12, -30); lives at The Hut (0, 0).", prompt)
+            self.assertIn("- Finn: works at The Hut (0, 0); lives at The Hut (-90, 90).", prompt)
+            self.assertIn("The Hut at (5, 5): Shared.", prompt)
+
+
 class PlayerTests(unittest.TestCase):
     def _registry(self, tmp, llm=None, **kwargs):
         npcs_path = Path(tmp) / "npcs.json"
@@ -747,6 +809,34 @@ class PlayerTests(unittest.TestCase):
             self.assertNotIn("note_player_name", {t["name"] for t in llm.last_tools})
             mara.respond("hi", conversation=True, with_player=True)
             self.assertIn("note_player_name", {t["name"] for t in llm.last_tools})
+
+    def test_selling_to_the_player_needs_only_the_goods(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mara = _identity("Mara")
+            mara.starting_money, mara.starting_items = 5, {"horseshoe": 4}
+            npcs_path = Path(tmp) / "npcs.json"
+            save_identities([mara], npcs_path)
+            mara = NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient()).get("Mara")
+
+            result = mara.tools.execute("sell_to_player", {"item": "Horseshoes", "quantity": 3, "total_price": 9})
+
+            self.assertIn("You sold 3 x horseshoe", result)
+            self.assertEqual((mara.inventory.money, mara.inventory.items), (14, {"horseshoe": 1}))
+            self.assertIn("You sold 3 x horseshoe", mara.memory.all()[0].content)
+
+            result = mara.tools.execute("sell_to_player", {"item": "horseshoe", "quantity": 2, "total_price": 6})
+            self.assertIn("didn't go through", result)
+            self.assertEqual((mara.inventory.money, mara.inventory.items), (14, {"horseshoe": 1}))
+
+    def test_selling_to_the_player_is_only_offered_talking_with_the_player(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _RecordingLLM()
+            mara = self._registry(tmp, llm).get("Mara")
+
+            mara.respond("hi", conversation=True)
+            self.assertNotIn("sell_to_player", {t["name"] for t in llm.last_tools})
+            mara.respond("hi", conversation=True, with_player=True)
+            self.assertIn("sell_to_player", {t["name"] for t in llm.last_tools})
 
     def test_known_names_persist_for_residents(self):
         with tempfile.TemporaryDirectory() as tmp:

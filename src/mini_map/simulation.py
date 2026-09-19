@@ -458,7 +458,7 @@ class Simulation:
 
         entry, exit_point = self._pick_entry_and_exit()
         standing_context = (
-            f"Your exit point: ({exit_point[0]}, {exit_point[1]}), on the edge of the map. "
+            f"Your way out of town: ({exit_point[0]}, {exit_point[1]}), where a track leaves on the far side. "
             "Reaching it means leaving town.\n" + purpose.standing_context()
         )
         with self._traveler_lock:
@@ -499,7 +499,7 @@ class Simulation:
         self._start_traveler_turn(
             identity.name,
             f"You've just arrived at the edge of town, at ({entry[0]}, {entry[1]}). "
-            f"Your exit point is ({exit_point[0]}, {exit_point[1]}), on the far side of the map."
+            f"Your way out of town is ({exit_point[0]}, {exit_point[1]}), on the far side."
             + self._traveler_state[identity.name].reminder(agent, now),
         )
 
@@ -581,7 +581,7 @@ class Simulation:
                 self._start_traveler_turn(
                     name,
                     f"You've reached ({reached[0]}, {reached[1]}).{company} "
-                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                    f"Your way out of town is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                 )
                 continue
 
@@ -594,7 +594,7 @@ class Simulation:
                         self._start_traveler_turn(
                             name,
                             f"{target} has finished their conversation and is free to talk now. "
-                            f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                            f"Your way out of town is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                         )
                         continue
                 elif now - st.waiting_since >= self.TRAVELER_MAX_WAIT_MINUTES:
@@ -610,7 +610,7 @@ class Simulation:
                 self._start_traveler_turn(
                     name,
                     f"You've just finished talking with {partner} and already said your goodbyes. "
-                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                    f"Your way out of town is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                     hide=AFTER_CONVERSATION,
                 )
                 continue
@@ -620,7 +620,7 @@ class Simulation:
                 self._start_traveler_turn(
                     name,
                     f"You're standing at ({agent.position[0]:.0f}, {agent.position[1]:.0f}), not walking anywhere. "
-                    f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                    f"Your way out of town is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                 )
 
     def _start_traveler_turn(self, name: str, stimulus: str, *, hide: frozenset[str] = frozenset()) -> None:
@@ -1187,8 +1187,9 @@ class Simulation:
         # Attributed, like an NPC-to-NPC line: the stimulus is also what gets
         # remembered, and a bare "go to the well -> Sure" read as small talk
         # on later ticks rather than something the player asked for.
-        # No trades: the player has no inventory, so buy/sell could only
-        # fail -- and a failed tool call leaves the player with no reply.
+        # No buy_item / sell_item: the player has no inventory, so they
+        # could only fail -- and a failed tool call leaves the player with
+        # no reply. sell_to_player covers selling to them instead.
         result = agent.respond(
             stimulus,
             scene=self._player_scene(agent),
