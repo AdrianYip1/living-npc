@@ -315,10 +315,13 @@ class NPCRegistry:
             too_far = self._range_error(initiator_name, target, "talk")
             if too_far is not None:
                 return too_far
+            hooks = self.conversation_hooks
+            refusal = hooks.refuse(initiator_name, resolved_name) if hooks.refuse is not None else None
+            if refusal is not None:
+                return refusal
             if not self.try_occupy_pair(initiator_name, resolved_name):
                 return f"{resolved_name} is busy right now."
             initiator = self.get(initiator_name)
-            hooks = self.conversation_hooks
 
             def exchange() -> None:
                 try:
@@ -433,8 +436,16 @@ class NPCRegistry:
                 too_far = self._range_error(name, other, "trade")
                 if too_far is not None:
                     return f"The trade didn't go through: {too_far}"
+                # Both sides have to agree to a trade, and a conversation is
+                # the only place the other side gets a say -- without this,
+                # a buyer could just take goods at whatever price it liked.
+                if self.partner_of(name) != other_name:
+                    return (
+                        f"The trade didn't go through: you can only trade with {other_name} "
+                        "while talking with them, once you've both agreed on it."
+                    )
                 try:
-                    trade(
+                    item = trade(
                         buyer=self._agents[buyer_name].inventory,
                         seller=self._agents[seller_name].inventory,
                         item=item,

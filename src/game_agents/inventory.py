@@ -30,7 +30,21 @@ class Inventory:
         self.items = {k: v for k, v in normalized.items() if v > 0}
 
     def count(self, item: str) -> int:
-        return self.items.get(normalize_item(item), 0)
+        return self.items.get(self.resolve(item), 0)
+
+    def resolve(self, item: str) -> str:
+        """The key `item` is stored under here. Normalized, and forgiving of
+        singular vs. plural, since the LLM says "horseshoes" about the
+        "horseshoe" it's carrying -- or the normalized name as-is, if
+        nothing matches either way.
+        """
+        key = normalize_item(item)
+        if key in self.items:
+            return key
+        for other in _number_variants(key):
+            if other in self.items:
+                return other
+        return key
 
     def describe(self) -> str:
         coins = f"{self.money} coin{'s' if self.money != 1 else ''}"
@@ -52,6 +66,24 @@ class Inventory:
             del self.items[key]
 
 
+def _number_variants(key: str) -> list[str]:
+    """Plausible singular/plural spellings of an item name, most likely
+    first. Only the last word changes ("iron ingots" -> "iron ingot").
+    """
+    head, _, last = key.rpartition(" ")
+    prefix = f"{head} " if head else ""
+    variants = [last + "s", last + "es"]
+    if last.endswith("ies"):
+        variants.append(last[:-3] + "y")
+    if last.endswith("es"):
+        variants.append(last[:-2])
+    if last.endswith("s"):
+        variants.append(last[:-1])
+    if last.endswith("y"):
+        variants.append(last[:-1] + "ies")
+    return [prefix + v for v in variants if v and v != last]
+
+
 class TradeError(ValueError):
     """Raised by trade() when a transaction can't go through. The message
     is written to be handed straight back to the NPC as a tool result.
@@ -67,11 +99,12 @@ def trade(
     total_price: int,
     buyer_name: str = "the buyer",
     seller_name: str = "the seller",
-) -> None:
+) -> str:
     """Moves `quantity` of `item` from seller to buyer and `total_price`
     coins from buyer to seller -- all of it or none of it. Every check runs
     before anything is mutated, so a failed trade leaves both inventories
-    exactly as they were.
+    exactly as they were. Returns the item's name as the seller had it
+    listed (see Inventory.resolve) -- what actually changed hands.
     """
     if buyer is seller:
         raise TradeError("You can't trade with yourself.")
@@ -79,7 +112,7 @@ def trade(
         raise TradeError("Quantity must be at least 1.")
     if total_price < 0:
         raise TradeError("Price can't be negative.")
-    key = normalize_item(item)
+    key = seller.resolve(item)
     if not key:
         raise TradeError("No item was named.")
     have = seller.count(key)
@@ -92,3 +125,4 @@ def trade(
     buyer._add(key, quantity)
     buyer.money -= total_price
     seller.money += total_price
+    return key

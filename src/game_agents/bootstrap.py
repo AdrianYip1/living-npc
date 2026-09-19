@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 from .chatty_mock import ChattyMockLLMClient
 from .llm import AnthropicLLMClient, DeepSeekLLMClient, LLMClient
 from .registry import NPCRegistry
-from .tools import Tool, ToolRegistry
 
 DATA_DIR = Path(__file__).parent / "data"
 NPCS_PATH = DATA_DIR / "npcs.json"
@@ -35,11 +34,6 @@ _BACKENDS: dict[str, type[LLMClient]] = {
 load_dotenv(Path(__file__).parent / ".env")
 
 
-def _wave_handler(target: str) -> str:
-    print(f"  [action] waves at {target}")
-    return "waved"
-
-
 def _build_llm() -> tuple[LLMClient, str]:
     name = os.environ.get("GAME_AGENTS_LLM", "mock")
     backend_cls = _BACKENDS.get(name)
@@ -51,26 +45,12 @@ def _build_llm() -> tuple[LLMClient, str]:
 
 
 def build_registry() -> tuple[NPCRegistry, str]:
-    tools = ToolRegistry()
-    tools.register(
-        Tool(
-            name="wave",
-            description="Wave at someone",
-            parameters={
-                "type": "object",
-                "properties": {"target": {"type": "string"}},
-                "required": ["target"],
-            },
-            handler=_wave_handler,
-        )
-    )
     llm, backend = _build_llm()
     return (
         NPCRegistry(
             NPCS_PATH,
             MEMORY_DIR,
             llm,
-            tools,
             instructions_path=INSTRUCTIONS_PATH,
             # A backstop, not a script -- conversations normally end on a
             # goodbye well before this (see conversation.run_conversation).

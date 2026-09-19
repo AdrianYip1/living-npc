@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +28,10 @@ class Scene:
         return "\n".join(lines)
 
 
+# Every action an NPC actually takes, one INFO record each -- mini_map.game
+# prints these to the console.
+action_log = logging.getLogger("game_agents.actions")
+
 # Actions that don't change anything anyone else would notice -- on a
 # routine turn (see Agent.respond), taking one of these isn't worth a memory.
 ROUTINE_ACTIONS = frozenset({"wait", "move_to", "check_inventory"})
@@ -35,6 +40,12 @@ ROUTINE_ACTIONS = frozenset({"wait", "move_to", "check_inventory"})
 # someone -- offering to start a conversation there invites a model to
 # "start" the one it's in (and so end it without saying a word).
 CONVERSATION_HIDDEN_ACTIONS = frozenset({"initiate_conversation"})
+
+# The opposite: actions only offered on a conversation turn. A trade needs
+# both sides to agree to it, and the only place the other side gets a say
+# is a conversation -- see also the registry's trade tools, which refuse
+# outside one.
+CONVERSATION_ONLY_ACTIONS = frozenset({"buy_item", "sell_item"})
 
 
 @dataclass
@@ -100,6 +111,7 @@ class Agent:
         tags: set[str] | None = None,
         routine: bool = False,
         conversation: bool = False,
+        hide: frozenset[str] = frozenset(),
     ) -> TurnResult:
         """`routine` marks a turn nobody prompted (e.g. the world tick's
         "It is now 08:15"): it's only remembered if the NPC did something
@@ -111,25 +123,34 @@ class Agent:
         `conversation` marks a turn inside an NPC-to-NPC exchange: the speak
         tool then also offers `ends_conversation`, so a goodbye can close
         the exchange on the same line instead of costing an extra turn.
+        Trades (CONVERSATION_ONLY_ACTIONS) are only offered on one.
+
+        `hide` takes options off the table for this one turn, by tool name
+        -- SPEAK_TOOL_NAME included, e.g. so an NPC that just said goodbye
+        has to actually leave instead of saying it again.
         """
         scene = scene or Scene()
         relevant = self.memory.retrieve(tags=tags)
 
+        offered = [
+            *([] if SPEAK_TOOL_NAME in hide else [self._speak_schema(conversation=conversation)]),
+            *(schema for schema in self.tools.schemas() if not self._hidden(schema["name"], conversation, hide)),
+        ]
         result = self.llm.complete(
             system=self._build_system_prompt(scene, relevant),
             messages=[{"role": "user", "content": stimulus}],
-            tools=[
-                self._speak_schema(conversation=conversation),
-                *(
-                    schema
-                    for schema in self.tools.schemas()
-                    if not (conversation and schema["name"] in CONVERSATION_HIDDEN_ACTIONS)
-                ),
-            ],
+            tools=offered,
         )
         call = result.tool_call
+        allowed = call.name in {schema["name"] for schema in offered}
 
         ends_conversation = False
+        if not allowed:
+            # The real backends can only pick an offered tool; this is for
+            # any that doesn't -- a hidden action stays undone, and isn't
+            # worth remembering.
+            tool_result = "That isn't something you can do right now."
+            return TurnResult(utterance=None, action={"name": call.name, "arguments": call.arguments, "result": tool_result})
         if call.name == SPEAK_TOOL_NAME:
             utterance = self._cap_utterance(call.arguments.get("text", ""))
             action = None
@@ -138,6 +159,8 @@ class Agent:
         else:
             utterance = None
             tool_result = self.tools.execute(call.name, call.arguments)
+            args = ", ".join(f"{key}={value!r}" for key, value in call.arguments.items())
+            action_log.info("%s: %s(%s) -> %s", self.identity.name, call.name, args, tool_result)
             action = {"name": call.name, "arguments": call.arguments, "result": tool_result}
             memory_content = f"{stimulus} -> [action] {call.name}({call.arguments}) -> {tool_result}"
 
@@ -148,6 +171,12 @@ class Agent:
         self.memory.add(memory_content, importance=self._score_importance(result), tags=tags or set())
 
         return turn
+
+    @staticmethod
+    def _hidden(name: str, conversation: bool, hide: frozenset[str]) -> bool:
+        if name in hide:
+            return True
+        return name in (CONVERSATION_HIDDEN_ACTIONS if conversation else CONVERSATION_ONLY_ACTIONS)
 
     def _speak_schema(self, *, conversation: bool = False) -> dict[str, Any]:
         schema = SPEAK_TOOL_SCHEMA

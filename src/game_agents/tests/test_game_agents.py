@@ -275,7 +275,7 @@ class RoutineTurnMemoryTests(unittest.TestCase):
 
     def _agent(self, tool_call: ToolCall) -> Agent:
         tools = ToolRegistry()
-        for name in ("move_to", "buy_item"):
+        for name in ("move_to", "initiate_conversation"):
             tools.register(
                 Tool(name=name, description=name, parameters={"type": "object", "properties": {}}, handler=lambda: "ok")
             )
@@ -296,7 +296,7 @@ class RoutineTurnMemoryTests(unittest.TestCase):
         self.assertEqual(agent.memory.all(), [])
 
     def test_routine_consequential_action_is_remembered(self):
-        agent = self._agent(ToolCall(name="buy_item", arguments={}))
+        agent = self._agent(ToolCall(name="initiate_conversation", arguments={}))
         agent.respond("It is now 08:15 (morning).", routine=True)
 
         self.assertEqual(len(agent.memory.all()), 1)
@@ -756,6 +756,14 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(inv.items, {"spare net": 3})
         self.assertEqual(inv.count("SPARE NET"), 3)
 
+    def test_singular_and_plural_find_the_same_item(self):
+        inv = Inventory(items={"iron ingot": 2, "berries": 5, "glass": 1})
+        self.assertEqual(inv.resolve("Iron Ingots"), "iron ingot")
+        self.assertEqual(inv.resolve("berry"), "berries")
+        self.assertEqual(inv.resolve("glass"), "glass")
+        self.assertEqual(inv.resolve("anvils"), "anvils")  # nothing close: as named
+        self.assertEqual(trade(buyer=Inventory(money=3), seller=inv, item="iron ingots", quantity=2, total_price=3), "iron ingot")
+
     def test_describe_lists_coins_and_items(self):
         self.assertEqual(Inventory(money=1).describe(), "You have 1 coin and no items.")
         self.assertEqual(
@@ -799,15 +807,43 @@ class TradeTests(unittest.TestCase):
 class InventoryToolTests(unittest.TestCase):
     """check_inventory / buy_item / sell_item as built by the registry,
     wired through Agent.tools.execute() directly, same as MoveToolTests.
+    Mara and Finn start out mid-conversation (unless in_conversation=False),
+    since that's the only place a trade goes through.
     """
 
-    def _registry(self, tmp, **kwargs):
+    def _registry(self, tmp, *, in_conversation=True, **kwargs):
         mara, finn = _identity("Mara"), _identity("Finn")
         mara.starting_money, mara.starting_items = 20, {"horseshoe": 3}
         finn.starting_money, finn.starting_items = 5, {"fish": 4}
         npcs_path = Path(tmp) / "npcs.json"
         save_identities([mara, finn], npcs_path)
-        return NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient(), **kwargs)
+        registry = NPCRegistry(npcs_path, Path(tmp) / "memory", MockLLMClient(), **kwargs)
+        if in_conversation:
+            registry.try_occupy_pair("Mara", "Finn")
+        return registry
+
+    def test_trade_refused_outside_a_conversation_with_the_other_side(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, in_conversation=False)
+
+            refused = registry.get("Finn").tools.execute(
+                "buy_item", {"item": "horseshoe", "seller_name": "Mara", "total_price": 1}
+            )
+
+            self.assertIn("only trade with Mara while talking with them", refused)
+            self.assertEqual(registry.get("Mara").inventory.count("horseshoe"), 3)
+            self.assertEqual(registry.get("Finn").inventory.money, 5)
+
+    def test_a_plural_item_name_finds_the_singular_in_stock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp)
+
+            result = registry.get("Mara").tools.execute(
+                "sell_item", {"item": "Horseshoes", "buyer_name": "Finn", "total_price": 4, "quantity": 2}
+            )
+
+            self.assertIn("You sold 2 x horseshoe to Finn", result)
+            self.assertEqual(registry.get("Finn").inventory.items, {"fish": 4, "horseshoe": 2})
 
     def test_starts_from_the_identity_starting_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

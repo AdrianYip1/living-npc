@@ -63,14 +63,15 @@ class ChattyMockLLMClient:
         self, *, system: str, messages: list[dict[str, str]], tools: list[dict[str, Any]]
     ) -> LLMResult:
         speak = next((t for t in tools if t["name"] == SPEAK_TOOL_NAME), None)
-        if speak is None:
+        tool_names = {t["name"] for t in tools}
+        if speak is None and "wait" not in tool_names:
             # Not an NPC turn (e.g. traveler identity generation): answer
             # like the plain mock, which makes the caller use its fallback.
+            # (An NPC turn can have speaking taken away, but never waiting.)
             return MockLLMClient().complete(system=system, messages=messages, tools=tools)
         stimulus = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-        tool_names = {t["name"] for t in tools}
         with self._lock:
-            if ENDS_CONVERSATION_FIELD in speak["parameters"]["properties"]:
+            if speak is not None and ENDS_CONVERSATION_FIELD in speak["parameters"]["properties"]:
                 return self._converse(system, stimulus, tool_names)
             if _coords(r"exit point: " + _COORD, system) is not None:
                 return self._act_traveler(system, stimulus, tool_names)
@@ -175,7 +176,7 @@ class ChattyMockLLMClient:
         goal = _coords(("Home: " if phase in ("evening", "night") else "Workplace: ") + _COORD, system)
         if goal is not None and distance(here, goal) > 3 and "move_to" in tools:
             return _call("move_to", x=goal[0], y=goal[1])
-        if rng.random() < 0.2:
+        if SPEAK_TOOL_NAME in tools and rng.random() < 0.2:
             fill = {"weather": _search(r"and ([\w ]+?) out\.", system) or "fine"}
             return _say(rng.choice(_MUTTERS), fill)
         return _call("wait")

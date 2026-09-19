@@ -12,7 +12,6 @@ from pathlib import Path
 
 from environment_agent.agent import EnvironmentAgent
 
-from game_agents.agent import TurnResult
 from game_agents.conversation import ConversationTurn
 from game_agents.identity import Identity
 from game_agents.llm import ENDS_CONVERSATION_FIELD, SPEAK_TOOL_NAME, LLMResult, ToolCall
@@ -118,14 +117,17 @@ class SpeechFeedTests(unittest.TestCase):
             self.assertIsNone(_npc(sim, "Mara")["talking_to"])
             self.assertFalse(_npc(sim, "Finn")["busy"])
 
-    def test_a_line_said_to_no_one_is_published_without_a_listener(self):
+    def test_no_one_speaks_outside_a_conversation(self):
         with tempfile.TemporaryDirectory() as tmp:
-            sim = Simulation(_registry(tmp, _MutterLLM(), names=("Mara",)), EnvironmentAgent(seed=1))
+            # _MutterLLM tries to speak anyway; it isn't offered, so it
+            # doesn't happen.
+            registry = _registry(tmp, _MutterLLM(), names=("Mara",))
+            sim = Simulation(registry, EnvironmentAgent(seed=1))
 
             sim.tick()
 
-            [line] = sim.state()["speech"]
-            self.assertEqual((line["speaker"], line["listener"], line["text"]), ("Mara", None, "Hm."))
+            self.assertEqual(sim.state()["speech"], [])
+            self.assertEqual(registry.get("Mara").memory.all(), [])
 
     def test_a_reply_to_the_player_is_published_to_the_player(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -197,33 +199,6 @@ class ConversationPacingTests(unittest.TestCase):
             self.assertEqual(len(sim.state()["speech"]), 5)
 
 
-class OverheardSpeechTests(unittest.TestCase):
-    def test_a_line_said_aloud_reaches_whoever_is_in_range(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            registry = _registry(tmp, _MutterLLM())  # Mara and Finn at (0, 0), Gus far off
-            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
-
-            sim._record_turn(registry.get("Mara"), TurnResult(utterance="Morning, Finn.", action=None))
-
-            [memory] = registry.get("Finn").memory.all()
-            self.assertEqual(memory.content, 'Mara said aloud nearby: "Morning, Finn."')
-            self.assertEqual(memory.tags, {"Mara"})
-            self.assertEqual(registry.get("Gus").memory.all(), [])
-            # ...and Mara remembers saying it, since someone heard -- so she
-            # doesn't say the same thing again next turn.
-            [own] = registry.get("Mara").memory.all()
-            self.assertEqual(own.content, 'You said aloud, with Finn nearby: "Morning, Finn."')
-
-    def test_a_line_nobody_hears_is_not_remembered(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            registry = _registry(tmp, _MutterLLM(), names=("Mara", "Gus"))
-            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
-
-            sim._record_turn(registry.get("Mara"), TurnResult(utterance="Hm.", action=None))
-
-            self.assertEqual(registry.get("Mara").memory.all(), [])
-
-
 class SpeakDescriptionTests(unittest.TestCase):
     def test_outside_a_conversation_speaking_is_thinking_aloud(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -247,7 +222,87 @@ class SpeakDescriptionTests(unittest.TestCase):
             self.assertNotIn("Think aloud", _Recording.tools[0]["description"])
 
 
+class _ToolsLLM(_ChatLLM):
+    """_ChatLLM, also recording which tools each routine turn offered."""
+
+    def __init__(self):
+        super().__init__()
+        self.routine_tools: dict[str, list[set[str]]] = {}
+
+    def complete(self, *, system, messages, tools):
+        names = {t["name"] for t in tools}
+        if not any(ENDS_CONVERSATION_FIELD in t["parameters"].get("properties", {}) for t in tools):
+            name = system.split(".", 1)[0].removeprefix("You are ")
+            self.routine_tools.setdefault(name, []).append(names)
+        return super().complete(system=system, messages=messages, tools=tools)
+
+
+class _OvertakenLLM:
+    """Gus gets pulled into a conversation while still deciding his turn --
+    which comes out as `call` anyway."""
+
+    def __init__(self, registry_ref: list, call: ToolCall):
+        self._registry_ref, self._call = registry_ref, call
+
+    def complete(self, *, system, messages, tools):
+        if system.startswith("You are Gus"):
+            self._registry_ref[0].try_occupy("Gus")
+            return LLMResult(tool_call=self._call)
+        return LLMResult(tool_call=ToolCall(name="wait", arguments={}))
+
+
 class ConversationFollowUpTests(unittest.TestCase):
+    def test_a_resident_cannot_speak_or_start_talking_on_the_turn_right_after_a_conversation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _ToolsLLM()
+            sim = Simulation(_registry(tmp, llm, names=("Mara", "Finn")), EnvironmentAgent(seed=1), line_pacing=False)
+
+            for _ in range(2):
+                sim.tick()
+                sim.wait_for_pending()
+
+            # Mara's turns: the one that starts the chat, then the first one
+            # after it, which has neither speaking nor starting another.
+            first, after = llm.routine_tools["Mara"][:2]
+            self.assertIn("initiate_conversation", first)
+            self.assertFalse({SPEAK_TOOL_NAME, "initiate_conversation"} & after)
+
+    def test_the_same_two_cannot_start_talking_again_right_away(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, _ChatLLM(), names=("Mara", "Finn"))
+            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
+            sim.tick()
+            sim.wait_for_pending()
+
+            again = registry.get("Mara").tools.execute("initiate_conversation", {"target_name": "Finn"})
+            self.assertIn("only just talked with Finn", again)
+
+            sim._environment._elapsed_minutes += Simulation.REPEAT_CONVERSATION_MINUTES
+            later = registry.get("Mara").tools.execute("initiate_conversation", {"target_name": "Finn"})
+            self.assertIn("conversation with Finn", later)
+
+    def test_a_turn_overtaken_by_a_conversation_is_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ref: list = []
+            registry = _registry(tmp, _OvertakenLLM(ref, ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "Hm."})))
+            ref.append(registry)
+            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
+
+            sim.tick()
+
+            self.assertEqual(sim.state()["speech"], [])
+
+    def test_an_overtaken_walk_is_not_queued_up_for_afterwards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ref: list = []
+            registry = _registry(tmp, _OvertakenLLM(ref, ToolCall(name="move_to", arguments={"x": 0, "y": 0})))
+            ref.append(registry)
+            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
+
+            sim.tick()
+
+            self.assertIsNone(registry.get("Gus").destination)
+
     def test_only_a_conversation_where_something_was_said_prompts_a_follow_up(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = _registry(tmp, _MutterLLM())

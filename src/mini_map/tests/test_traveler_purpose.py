@@ -138,6 +138,7 @@ class AdmittedPurposeTests(unittest.TestCase):
             sim = _sim(tmp, MockLLMClient())
             traveler, st = _admit(sim, TravelerPurpose(BUY, place=_FORGE, item="horseshoe", seller="Mara"))
             traveler.position = (12.0, -25.0)
+            sim._registry.try_occupy_pair(traveler.identity.name, "Mara")  # trades only happen mid-conversation
 
             traveler.tools.execute("buy_item", {"item": "horseshoe", "seller_name": "Mara", "total_price": 5})
 

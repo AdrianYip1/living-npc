@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import socket
 import threading
 import webbrowser
@@ -26,7 +27,7 @@ from pathlib import Path
 
 from environment_agent.agent import EnvironmentAgent
 
-from game_agents.bootstrap import build_registry
+from game_agents.bootstrap import CONVERSATION_LOG_DIR, build_registry
 
 from .simulation import Simulation
 
@@ -43,9 +44,9 @@ TICKS_PER_REAL_MINUTE = 60.0
 LLM_CALLS_PER_GAME_HOUR = 4.0
 # Inclusive (min, max) traveler arrivals per in-game day. Deliberately high
 # for now so travelers are easy to spot: at the default clock speed (a day
-# every 24 real minutes) 20-60 is one every ~36 real seconds on average.
+# every 24 real minutes) 15-30 is one every ~64 real seconds on average.
 # EnvironmentAgent's own default is a more realistic (2, 6).
-TRAVELERS_PER_DAY = (20, 60)
+TRAVELERS_PER_DAY = (15, 30)
 
 # Set by run() before the server starts; the handler reads it per-request.
 # A single-process script gets to have one simulation as shared state
@@ -141,6 +142,8 @@ def run(
 ) -> None:
     global _simulation
 
+    _print_actions()
+    _clear_conversation_logs()
     registry, backend = build_registry()
     environment = EnvironmentAgent(travelers_per_day=TRAVELERS_PER_DAY)
     _simulation = Simulation(
@@ -184,6 +187,29 @@ def run(
                 f"Find it with: netstat -ano | findstr {port}\n"
                 "then stop it with: taskkill /F /PID <pid>"
             )
+
+
+def _clear_conversation_logs() -> None:
+    """Each run starts with an empty conversation_log/, so what's in there
+    is only ever this session's conversations.
+    """
+    for path in CONVERSATION_LOG_DIR.glob("*.json"):
+        path.unlink()
+
+
+def _print_actions() -> None:
+    """Every action an NPC takes (see game_agents.agent.action_log), one
+    line each on the console. Only that logger -- the root logger stays
+    quiet, or the HTTP client's per-request lines would bury these.
+    """
+    actions = logging.getLogger("game_agents.actions")
+    if actions.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("  [action] %(message)s"))
+    actions.addHandler(handler)
+    actions.setLevel(logging.INFO)
+    actions.propagate = False
 
 
 def _parse_args() -> argparse.Namespace:

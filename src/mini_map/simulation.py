@@ -21,6 +21,7 @@ from environment_agent.travelers import Traveler
 from game_agents.agent import Agent, Scene, TurnResult
 from game_agents.conversation import ConversationHooks, ConversationTurn
 from game_agents.identity import Identity
+from game_agents.llm import SPEAK_TOOL_NAME
 from game_agents.registry import NPCRegistry, conversation_happened
 from game_agents.storage import identity_to_record
 from game_agents.traveler_identity import generate_traveler_identity
@@ -29,6 +30,19 @@ from game_agents.world import INTERACTION_RANGE, MAP_MAX, MAP_MIN, distance, ren
 from .traveler_purpose import BUY, TravelerPurpose, pick_purpose
 
 log = logging.getLogger(__name__)
+
+# Nobody speaks outside a conversation. Given the chance, travelers
+# announced what they were about to do ("Time I got moving!") instead of
+# doing it -- a turn spent speaking is a turn not spent walking -- or
+# greeted someone they hadn't started a conversation with, and residents
+# said the same line to themselves every few turns ("Hinges won't hammer
+# themselves"), sometimes aimed at whoever they'd just said goodbye to.
+# To talk to someone, you start a conversation with them.
+NO_SPEAKING = frozenset({SPEAK_TOOL_NAME})
+# Anyone's first turn after a conversation: the goodbye's been said, so no
+# saying it again -- and no starting straight back up with whoever's still
+# standing there, which is what a model does once it can't speak.
+AFTER_CONVERSATION = NO_SPEAKING | {"initiate_conversation"}
 
 
 class Simulation:
@@ -131,6 +145,10 @@ class Simulation:
     # (no LLM), and the least one that came to buy something ever carries.
     TRAVELER_FALLBACK_MONEY = (5, 30)
     TRAVELER_BUYER_MIN_MONEY = 20
+    # How long, in game-minutes, before the same two can start another
+    # conversation -- otherwise a resident keeps greeting a traveler that's
+    # lingering nearby, and they go over the same ground again.
+    REPEAT_CONVERSATION_MINUTES = 60
     # How many recent spoken lines state() keeps around -- same slack
     # reasoning as RECENT_TRAVELERS.
     RECENT_SPEECH = 60
@@ -186,6 +204,12 @@ class Simulation:
         self._traveler_state: dict[str, _TravelerState] = {}
         self._turns_in_flight: set[str] = set()
         self._turns_lock = threading.Lock()
+        # Residents just out of a conversation -- their next turn gets
+        # AFTER_CONVERSATION (a traveler's gets it via _TravelerState.talked_with).
+        self._just_talked: set[str] = set()
+        # When each pair (keyed like _line_ready_at) last finished talking,
+        # in elapsed game-minutes -- see REPEAT_CONVERSATION_MINUTES.
+        self._talked_at: dict[frozenset[str], int] = {}
         self._rng = random.Random(seed)
         # Spoken lines for the page, tagged with ever-increasing ids like
         # _traveler_arrivals. Appended from whichever thread the line was
@@ -202,6 +226,7 @@ class Simulation:
             scene=self._scene,
             on_turn=self._on_conversation_turn,
             on_end=self._on_conversation_end,
+            refuse=self._refuse_conversation,
         )
 
     def run_forever(self) -> None:
@@ -463,8 +488,9 @@ class Simulation:
                 partner, st.talked_with = st.talked_with, None
                 self._start_traveler_turn(
                     name,
-                    f"You've just finished talking with {partner}. "
+                    f"You've just finished talking with {partner} and already said your goodbyes. "
                     f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
+                    hide=AFTER_CONVERSATION,
                 )
                 continue
 
@@ -476,22 +502,24 @@ class Simulation:
                     f"Your exit point is ({st.exit_point[0]}, {st.exit_point[1]})." + st.reminder(agent, now),
                 )
 
-    def _start_traveler_turn(self, name: str, stimulus: str) -> None:
+    def _start_traveler_turn(self, name: str, stimulus: str, *, hide: frozenset[str] = frozenset()) -> None:
         with self._turns_lock:
             if name in self._turns_in_flight:
                 return
             self._turns_in_flight.add(name)
-        if not self._submit(self._turn_pool, self._run_traveler_turn, name, stimulus):
+        if not self._submit(self._turn_pool, self._run_traveler_turn, name, stimulus, hide):
             with self._turns_lock:
                 self._turns_in_flight.discard(name)
 
-    def _run_traveler_turn(self, name: str, stimulus: str) -> None:
+    def _run_traveler_turn(self, name: str, stimulus: str, hide: frozenset[str] = frozenset()) -> None:
         try:
             agent = self._registry.get(name)
             if agent is None:
                 return
-            result = agent.respond(stimulus, scene=self._scene(agent), routine=True)
-            self._record_turn(agent, result)
+            destination = agent.destination
+            result = agent.respond(stimulus, scene=self._scene(agent), routine=True, hide=NO_SPEAKING | hide)
+            if not self._overtaken(agent, result, destination):
+                self._record_turn(agent, result)
         except Exception:
             log.exception("traveler %s's turn failed", name)
         finally:
@@ -536,6 +564,8 @@ class Simulation:
                 continue
 
             surroundings = self._surroundings(agent)
+            hide = AFTER_CONVERSATION if name in self._just_talked else NO_SPEAKING
+            self._just_talked.discard(name)
             scene = Scene(
                 time=f"{clock} ({phase})",
                 context=(
@@ -543,11 +573,31 @@ class Simulation:
                     + (f"\n{surroundings}" if surroundings else "")
                 ),
             )
-            result = agent.respond(f"It is now {clock} ({phase}).", scene=scene, routine=True)
+            destination = agent.destination
+            result = agent.respond(f"It is now {clock} ({phase}).", scene=scene, routine=True, hide=hide)
             acted.add(name)
+            if self._overtaken(agent, result, destination):
+                continue
             partner = self._record_turn(agent, result)
             if partner is not None:
                 acted.add(partner)
+
+    def _overtaken(self, agent: Agent, result: TurnResult, destination: tuple[int, int] | None) -> bool:
+        """Whether someone pulled `agent` into a conversation while this
+        turn was still being decided -- it was checked for busy before the
+        (slow) LLM call, not after. The decision was made for a moment
+        that's gone, so it's dropped: nothing said (it'd land mid-
+        conversation, addressed to no one), and no walk queued up for
+        afterwards. Its own successful initiate_conversation doesn't count.
+        """
+        if not self._registry.is_busy(agent.identity.name):
+            return False
+        action = result.action
+        if action is not None and action["name"] == "initiate_conversation" and conversation_happened(action["result"]):
+            return False
+        if action is not None and action["name"] == "move_to":
+            agent.destination = destination
+        return True
 
     def _record_turn(self, agent: Agent, result: TurnResult) -> str | None:
         """Updates the activity line for whoever took a turn -- and, if the
@@ -556,9 +606,6 @@ class Simulation:
         (out of range, busy) leaves the target untouched.
         """
         name = agent.identity.name
-        if result.utterance is not None:
-            self._publish_speech(name, None, result.utterance)
-            self._overhear(agent, result.utterance)
         self._publish_trade(name, result.action)
         self._note_busy_refusal(name, result.action)
         if (
@@ -593,29 +640,6 @@ class Simulation:
             if target != st.waiting_for:
                 # A fresh wait (not a retry of the same one) starts the clock.
                 st.waiting_for, st.waiting_since = target, self._environment.elapsed_minutes
-
-    def _overhear(self, speaker: Agent, text: str) -> None:
-        """A line said aloud outside any conversation still reaches whoever
-        is close enough to talk to the speaker (and not busy in a
-        conversation of their own): it goes in their memory, so on their
-        next turn they can answer it -- e.g. by starting a conversation.
-        """
-        name = speaker.identity.name
-        heard_by = [
-            other
-            for other in self._registry.all()
-            if other is not speaker
-            and not self._registry.is_busy(other.identity.name)
-            and distance(speaker.position, other.position) <= INTERACTION_RANGE
-        ]
-        for other in heard_by:
-            other.memory.add(f'{name} said aloud nearby: "{text}"', importance=5, tags={name})
-        if heard_by:
-            # A routine line isn't normally remembered (see Agent.respond),
-            # but one other people heard is -- otherwise the speaker has no
-            # idea it already said it, and says it again next turn.
-            names = {other.identity.name for other in heard_by}
-            speaker.memory.add(f'You said aloud, with {", ".join(sorted(names))} nearby: "{text}"', importance=3, tags=names)
 
     # ------------------------------------------------------------------ #
     # NPC-to-NPC conversations (see ConversationHooks)
@@ -654,6 +678,7 @@ class Simulation:
             return
         a, b = transcript[0].speaker, transcript[0].listener
         self._hold_until(self._line_ready_at.pop(frozenset((a, b)), 0.0))
+        self._talked_at[frozenset((a, b))] = self._environment.elapsed_minutes
         self._last_activity[a] = f"talked with {b}"
         self._last_activity[b] = f"talked with {a}"
         if not any(turn.utterance for turn in transcript):
@@ -664,6 +689,14 @@ class Simulation:
             st = self._traveler_state.get(name)
             if st is not None:
                 st.talked_with = partner
+            else:
+                self._just_talked.add(name)
+
+    def _refuse_conversation(self, initiator: str, target: str) -> str | None:
+        talked_at = self._talked_at.get(frozenset((initiator, target)))
+        if talked_at is None or self._environment.elapsed_minutes - talked_at >= self.REPEAT_CONVERSATION_MINUTES:
+            return None
+        return f"You only just talked with {target} -- there's nothing new to say yet. Leave them be for now."
 
     def _hold_until(self, deadline: float) -> None:
         """Waits out the real time left until `deadline` -- except that time

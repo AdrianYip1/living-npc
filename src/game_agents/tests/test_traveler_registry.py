@@ -133,6 +133,7 @@ class TravelerLifecycleTests(unittest.TestCase):
             registry = _registry(tmp)
             registry.get("Mara").inventory.money = 10
             registry.add_traveler(_identity("Wren", starting_items={"map": 1}), position=(0, 0))
+            registry.try_occupy_pair("Mara", "Wren")  # trades only happen mid-conversation
 
             result = registry.get("Mara").tools.execute(
                 "buy_item", {"item": "map", "seller_name": "Wren", "total_price": 4}

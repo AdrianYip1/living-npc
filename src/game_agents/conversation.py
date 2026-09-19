@@ -44,12 +44,16 @@ class ConversationHooks:
       block, which is how the simulation paces lines out for reading.
     - on_end: called with the whole transcript, before both sides are
       released.
+    - refuse: asked before an exchange starts, with (initiator, target);
+      a reason string turns the attempt down, handed back to the initiator
+      as its tool result. None lets it go ahead.
     """
 
     run: Callable[[Callable[[], None]], bool] | None = None
     scene: Callable[[], Scene] | None = None
     on_turn: Callable[[ConversationTurn], None] | None = None
     on_end: Callable[[list[ConversationTurn]], None] | None = None
+    refuse: Callable[[str, str], str | None] | None = None
 
 
 def run_conversation(

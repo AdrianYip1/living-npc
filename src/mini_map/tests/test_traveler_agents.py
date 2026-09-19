@@ -27,8 +27,9 @@ _COORDS = re.compile(r"\((-?\d+), (-?\d+)\)")
 class _TravelerLLM:
     """Plays a traveler the way the prompt asks: on arrival, walk to the
     exit point named in the stimulus; on noticing someone, walk over to
-    them (interrupting the walk). Everything else just speaks. Records
-    every stimulus a traveler received.
+    them (interrupting the walk). Everything else just speaks -- or waits,
+    on a turn that doesn't allow speaking. Records every stimulus a
+    traveler received.
     """
 
     def __init__(self, *, chase_noticed: bool = True):
@@ -40,7 +41,9 @@ class _TravelerLLM:
         tool_names = {t["name"] for t in tools}
         if "create_identity" in tool_names:
             return MockLLMClient().complete(system=system, messages=messages, tools=tools)
-        if any("few words" in t["description"] for t in tools if t["name"] == SPEAK_TOOL_NAME):
+        speak = next((t for t in tools if t["name"] == SPEAK_TOOL_NAME), None)
+        # Only a traveler's prompt names an exit point.
+        if "exit point" in system:
             self.stimuli.append(stimulus)
         if stimulus.startswith("You've just arrived"):
             x, y = _COORDS.findall(stimulus)[-1]  # the exit point
@@ -48,6 +51,8 @@ class _TravelerLLM:
         if stimulus.startswith("You notice") and self.chase_noticed:
             x, y = _COORDS.findall(stimulus)[0]
             return LLMResult(tool_call=ToolCall(name="move_to", arguments={"x": int(x), "y": int(y)}))
+        if speak is None:
+            return LLMResult(tool_call=ToolCall(name="wait", arguments={}))
         return LLMResult(tool_call=ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "hm"}))
 
 

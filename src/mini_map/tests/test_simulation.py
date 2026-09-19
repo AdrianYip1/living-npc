@@ -308,14 +308,11 @@ class SimulationTickTests(unittest.TestCase):
 
             sim.tick()
 
-            # Mock NPCs just speak on the tick -- routine, so nothing to
-            # crowd real interactions out of their top memories. (Each does
-            # overhear the other, both standing at (0, 0), and so remember
-            # what was said aloud -- see Simulation._overhear -- but nothing
-            # of their own routine turn beyond that.)
+            # Mock NPCs try to speak on the tick, which isn't on offer
+            # outside a conversation -- nothing happens, and nothing is
+            # left to crowd real interactions out of their top memories.
             for name in ("Mara", "Finn"):
-                memories = registry.get(name).memory.all()
-                self.assertTrue(all("said aloud" in m.content for m in memories), memories)
+                self.assertEqual(registry.get(name).memory.all(), [])
 
     def test_busy_npc_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -354,7 +351,7 @@ class SimulationTickTests(unittest.TestCase):
             # instead of a bogus "talked with Mara".
             self.assertEqual(llm.calls["Finn"], 1)
             finn_state = next(n for n in sim.state()["npcs"] if n["name"] == "Finn")
-            self.assertEqual(finn_state["activity"], "said: hello")
+            self.assertNotIn("Mara", finn_state["activity"])
 
     def test_state_reports_time_of_day_weather_and_positions(self):
         with tempfile.TemporaryDirectory() as tmp:
