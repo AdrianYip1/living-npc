@@ -68,6 +68,7 @@ void HTN::Renderer::drawFrame() {
 
 	f32 aspect = static_cast<f32>(device.getExtent().width) / static_cast<f32>(device.getExtent().height);
 	ubo.proj = enginemath::Mat4::projectionM(0.7854f, aspect, 0.1f, 100.0f);
+	ubo.proj.m[1][1] *= -1.0f;
 
 	uniform.updateUniformBuffer(currentFrame, ubo);
 
