@@ -9,12 +9,14 @@
 #include "descriptor.hpp"
 #include "Model/model.hpp"
 #include "Model/uniform.hpp"
+#include "Model/texture.hpp"
 #include "Model/modelLoading.hpp"
 #include "Platform/window.hpp"
 #include "Core/camera.hpp"
 #include "../ProceduralAnimation/faceAnimator.hpp"
 
 #include <memory>
+#include <map>
 
 namespace HTN {
 	class Renderer {
@@ -41,7 +43,8 @@ namespace HTN {
 
 		VkDescriptorPool descriptorPool;
 		VkDescriptorPool imguiPool;
-		std::vector<VkDescriptorSet> descriptorSets;
+		std::map<std::string, std::unique_ptr<Texture>> textures;
+		std::map<std::string, std::vector<VkDescriptorSet>> materialSets;
 
 		LightUBO light;
 		std::vector<f32> faceWeights = std::vector<f32>(MAX_WEIGHTS, 0.0f);
@@ -55,6 +58,7 @@ namespace HTN {
 		std::vector<VkFence> inFlightFences;
 
 		void createSyncObjects();
+		void createTextures();
 		void createDescriptors();
 		void initImGui();
 	};

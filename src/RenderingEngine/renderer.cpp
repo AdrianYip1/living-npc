@@ -21,6 +21,7 @@ HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 
 	inverseBindMatrices = fmodel.inverseBindMatrix;
 	Model::createModel(device, std::move(fmodel), &model);
+	createTextures();
 	createDescriptors();
 	initImGui();
 	createSyncObjects();
@@ -34,6 +35,7 @@ HTN::Renderer::~Renderer() {
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
 
+	textures.clear();
 	vkDestroyDescriptorPool(device.getDevice(), imguiPool, nullptr);
 	vkDestroyDescriptorPool(device.getDevice(), descriptorPool, nullptr);
 
@@ -103,7 +105,7 @@ void HTN::Renderer::drawFrame() {
 	ImGui::Render();
 
 	drawing.recordCommandBuffer(drawing.getCommandBuffer(currentFrame), swapchainImageIndex,
-								descriptorSets[currentFrame], model);
+								materialSets, currentFrame, model);
 
 	VkSubmitInfo submitInfo{};
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -174,26 +176,46 @@ void HTN::Renderer::createSyncObjects() {
 	}
 }
 
+void HTN::Renderer::createTextures() {
+	for (const submesh& s : model.getPrimitives()) {
+		if (!s.textureUri.empty() && textures.find(s.textureUri) == textures.end()) {
+			std::string path = "models/" + s.textureUri;
+			textures[s.textureUri] = std::make_unique<Texture>(device, path);
+		}
+	}
+	if (textures.find("") == textures.end()) {
+		textures[""] = std::make_unique<Texture>(device, "models/white.png");
+	}
+}
+
 void HTN::Renderer::createDescriptors() {
+	u32 materialCount = static_cast<u32>(textures.size());
+
 	Descriptor::createDescriptorPool(device,
 		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-		descriptorPool);
+		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+		descriptorPool, materialCount);
 
 	VkBuffer deltasBuffer = model.getDeltasBuffer();
-	Descriptor::createDescriptorSets(device,
-		pipeline.getUboSetLayout(),
-		descriptorPool,
-		{0, 1, 2, 3, 4},
-		{uniform.getUniformBuffers(), uniform.getLightUniformBuffers(),
-		 {deltasBuffer, deltasBuffer}, uniform.getWeightBuffers(),
-		 uniform.getJointBuffers()},
-		{{}, {}, {}, {}, {}},
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-		descriptorSets);
+
+	for (auto& [uri, tex] : textures) {
+		VkDescriptorImageInfo imageInfo{};
+		imageInfo.sampler = tex->getSampler();
+		imageInfo.imageView = tex->getImageView();
+		imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		Descriptor::createDescriptorSets(device, pipeline.getUboSetLayout(), descriptorPool,
+			{0, 1, 2, 3, 4, 5},
+			{uniform.getUniformBuffers(), uniform.getLightUniformBuffers(),
+			 {deltasBuffer, deltasBuffer}, uniform.getWeightBuffers(),
+			 uniform.getJointBuffers(), {}},
+			{{}, {}, {}, {}, {}, imageInfo},
+			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+			materialSets[uri]);
+	}
 }
 
 void HTN::Renderer::initImGui() {

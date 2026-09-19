@@ -27,18 +27,23 @@ layout(std430, set = 0, binding = 4) readonly buffer PaletteBuffer {
 
 layout(push_constant) uniform MorphPush {
     mat4 model;
+    vec4 baseColor;
     uint morphStartIndex;
     uint targetCount;
     uint vertexOffset;
     uint vertexCount;
     uint weightsStartIndex;
     uint weightBase;
+    uint useTexture;
     uint isSkinned;
     uint jointBase;
 } PushConstants;
 
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec3 fragNormal;
+layout(location = 2) out vec2 fragTexCoord;
+layout(location = 3) out vec3 fragBaseColor;
+layout(location = 4) flat out uint fragUseTexture;
 
 void main() {
     vec3 pos = inPosition;
@@ -67,4 +72,7 @@ void main() {
     gl_Position = ubo.proj * ubo.view * PushConstants.model * vec4(pos, 1.0);
     fragColor = inColor;
     fragNormal = mat3(PushConstants.model) * normal;
+    fragTexCoord = inTexCoord;
+    fragBaseColor = PushConstants.baseColor.rgb;
+    fragUseTexture = PushConstants.useTexture;
 }

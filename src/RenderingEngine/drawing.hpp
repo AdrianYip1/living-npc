@@ -8,6 +8,8 @@
 
 #include <vector>
 #include <array>
+#include <map>
+#include <string>
 
 namespace HTN {
 	class Drawing {
@@ -20,7 +22,8 @@ namespace HTN {
 		std::vector<VkFramebuffer>& getFramebuffers() { return swapchainFramebuffers; }
 		VkCommandBuffer getCommandBuffer(u32 frame) { return commandBuffers[frame]; }
 		void recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex,
-							 VkDescriptorSet descriptorSet, Model& model);
+							 const std::map<std::string, std::vector<VkDescriptorSet>>& materialSets,
+							 u32 currentFrame, Model& model);
 		void createFramebuffer();
 
 	private:

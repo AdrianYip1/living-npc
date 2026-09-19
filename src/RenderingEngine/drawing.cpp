@@ -54,7 +54,8 @@ void HTN::Drawing::createCommandBuffer() {
 }
 
 void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex,
-										VkDescriptorSet descriptorSet, Model& model) {
+										const std::map<std::string, std::vector<VkDescriptorSet>>& materialSets,
+										u32 currentFrame, Model& model) {
 	VkCommandBufferBeginInfo beginInfo{};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -94,7 +95,7 @@ void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapch
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.getGraphicsPipeline());
 	model.bind(commandBuffer);
-	model.draw(commandBuffer, pipeline.getPipelineLayout(), descriptorSet, 0);
+	model.draw(commandBuffer, pipeline.getPipelineLayout(), materialSets, currentFrame, 0);
 
 	ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
 

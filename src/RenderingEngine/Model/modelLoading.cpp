@@ -10,6 +10,29 @@
 #include <string>
 #include <stdexcept>
 
+static std::string decodeUri(const char* s) {
+	auto hex = [](char c) -> int {
+		if (c >= '0' && c <= '9') return c - '0';
+		if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+		if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+		return -1;
+	};
+	std::string out;
+	for (size_t i = 0; s[i]; i++) {
+		if (s[i] == '%' && s[i + 1] && s[i + 2]) {
+			int hi = hex(s[i + 1]);
+			int lo = hex(s[i + 2]);
+			if (hi >= 0 && lo >= 0) {
+				out += static_cast<char>(hi * 16 + lo);
+				i += 2;
+				continue;
+			}
+		}
+		out += s[i];
+	}
+	return out;
+}
+
 static enginemath::Mat4 quatToMat(float x, float y, float z, float w) {
 	float xx = x * x, yy = y * y, zz = z * z;
 	float xy = x * y, xz = x * z, yz = y * z;
@@ -146,6 +169,17 @@ void HTN::Loader::recurseNodes(cgltf_node* node, fModel& out, u32& weightBase) {
 			meshTargetCount = static_cast<u32>(targetCount);
 			u32 morphStartIndex = targetCount > 0 ? static_cast<u32>(out.deltas.size()) : (u32)-1;
 
+			std::string textureUri;
+			enginemath::Vec4 baseColor(1.0f, 1.0f, 1.0f, 1.0f);
+			cgltf_material* mat = primitive->material;
+			if (mat && mat->has_pbr_metallic_roughness) {
+				cgltf_float* bcf = mat->pbr_metallic_roughness.base_color_factor;
+				baseColor = enginemath::Vec4(bcf[0], bcf[1], bcf[2], bcf[3]);
+				cgltf_texture* tex = mat->pbr_metallic_roughness.base_color_texture.texture;
+				if (tex && tex->image && tex->image->uri)
+					textureUri = decodeUri(tex->image->uri);
+			}
+
 			submesh sm{};
 			sm.indexStart = indexStart;
 			sm.indexCount = indexCount;
@@ -154,6 +188,8 @@ void HTN::Loader::recurseNodes(cgltf_node* node, fModel& out, u32& weightBase) {
 			sm.vertexOffset = vertexOffset;
 			sm.vertexCount = static_cast<u32>(posCount);
 			sm.weightsStartIndex = weightBase;
+			sm.textureUri = textureUri;
+			sm.baseColor = baseColor;
 			sm.isSkinned = isSkinned ? 1u : 0u;
 			out.primitives.push_back(sm);
 

@@ -33,19 +33,25 @@ void HTN::Model::bind(VkCommandBuffer commandBuffer) {
 }
 
 void HTN::Model::draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
-	VkDescriptorSet descriptorSet, u32 weightBase, u32 jointBase) {
-	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
-		0, 1, &descriptorSet, 0, nullptr);
-
+	const std::map<std::string, std::vector<VkDescriptorSet>>& materialSets,
+	u32 currentFrame, u32 weightBase, u32 jointBase) {
 	for (const submesh& s : model.primitives) {
+		auto it = materialSets.find(s.textureUri);
+		if (it == materialSets.end()) it = materialSets.find("");
+		if (it == materialSets.end()) it = materialSets.begin();
+		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
+			0, 1, &it->second[currentFrame], 0, nullptr);
+
 		MorphPush push{};
 		push.model = enginemath::Mat4::identity();
+		push.baseColor = s.baseColor;
 		push.morphStartIndex = s.morphStartIndex;
 		push.targetCount = s.targetCount;
 		push.vertexOffset = s.vertexOffset;
 		push.vertexCount = s.vertexCount;
 		push.weightsStartIndex = s.weightsStartIndex;
 		push.weightBase = weightBase;
+		push.useTexture = s.textureUri.empty() ? 0u : 1u;
 		push.isSkinned = s.isSkinned;
 		push.jointBase = jointBase;
 		vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);

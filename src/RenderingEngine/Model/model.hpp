@@ -12,6 +12,7 @@
 #include <vector>
 #include <array>
 #include <string>
+#include <map>
 
 namespace HTN {
 	struct Vertex {
@@ -75,17 +76,21 @@ namespace HTN {
 		u32 vertexOffset = 0;
 		u32 vertexCount = 0;
 		u32 weightsStartIndex = 0;
+		std::string textureUri;
+		enginemath::Vec4 baseColor = enginemath::Vec4(1.0f, 1.0f, 1.0f, 1.0f);
 		u32 isSkinned = 0;
 	};
 
 	struct MorphPush {
 		enginemath::Mat4 model = enginemath::Mat4::identity();
+		enginemath::Vec4 baseColor = enginemath::Vec4(1.0f, 1.0f, 1.0f, 1.0f);
 		u32 morphStartIndex = 0;
 		u32 targetCount = 0;
 		u32 vertexOffset = 0;
 		u32 vertexCount = 0;
 		u32 weightsStartIndex = 0;
 		u32 weightBase = 0;
+		u32 useTexture = 0;
 		u32 isSkinned = 0;
 		u32 jointBase = 0;
 	};
@@ -109,7 +114,10 @@ namespace HTN {
 
 		void bind(VkCommandBuffer commandBuffer);
 		void draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
-				  VkDescriptorSet descriptorSet, u32 weightBase, u32 jointBase = 0);
+				  const std::map<std::string, std::vector<VkDescriptorSet>>& materialSets,
+				  u32 currentFrame, u32 weightBase, u32 jointBase = 0);
+
+		const std::vector<submesh>& getPrimitives() const { return model.primitives; }
 
 		VkBuffer getDeltasBuffer() { return deltasBuffer; }
 
