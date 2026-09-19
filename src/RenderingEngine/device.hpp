@@ -57,6 +57,17 @@ namespace HTN {
 		VkQueue getGraphicsQueue() const { return graphicsQueue; }
 		VkQueue getPresentQueue() const { return presentQueue; }
 
+		VkCommandPool getCommandPool() const { return commandPool; }
+		VkSampleCountFlagBits getMSAASampleCount() { return msaaSamples; }
+		VkExtent2D getExtent() { return swapchainExtent; }
+		VkSwapchainKHR getSwapchain() { return swapchain; }
+		VkFormat getSwapchainFormat() { return swapchainImageFormat; }
+	
+		std::vector<VkImageView> getSwapchainImageViews() { return swapchainImageViews; }
+		std::vector<VkImage> getSwapchainImages() { return swapchainImages; }
+		VkImageView getDepthImageView() { return depthImageView; }
+		VkImageView getColorImageView() { return colorImageView; }
+
 		SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
 		QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
 		VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
