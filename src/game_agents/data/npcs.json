@@ -1,6 +1,7 @@
 [
   {
     "name": "Mara",
+    "gender": "female",
     "traits": ["gruff", "loyal", "quick to laugh"],
     "backstory": "Runs the town's only blacksmith shop, inherited from her mother.",
     "speech_style": "short sentences, dry humor",
@@ -17,9 +18,10 @@
   },
   {
     "name": "Finn",
+    "gender": "male",
     "traits": ["curious", "chatty", "a little nervous"],
     "backstory": "The town's fisherman, spends more time talking to travelers than fishing.",
-    "speech_style": "long-winded, trails off mid-sentence",
+    "speech_style": "friendly and casual, dockside slang",
     "goals": ["find someone willing to trade for a spare net"],
     "home": [55, -20],
     "workplace": [70, 45],

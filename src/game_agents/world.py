@@ -13,7 +13,7 @@ def clamp_coordinate(value: int) -> int:
 
 # How close (in map units, straight-line) two NPCs must be to talk to or
 # trade with each other.
-INTERACTION_RANGE = 10
+INTERACTION_RANGE = 16
 
 
 def distance(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -27,7 +27,7 @@ def distance(a: tuple[float, float], b: tuple[float, float]) -> float:
 AWARENESS_RANGE = 40
 
 # The two labeled lines render_surroundings() writes. Exposed so anything
-# reading the prompt back (the chatty mock backend) parses the same format.
+# reading the prompt back (e.g. tests) matches the same format.
 IN_REACH_LABEL = "Close enough to talk to"
 IN_VIEW_LABEL = "Further off, but in view"
 BUSY_MARK = " (busy talking)"
@@ -56,11 +56,11 @@ def render_surroundings(me: tuple[float, float], others: list[tuple[str, tuple[f
 
 
 # How close (map units) one NPC stops to another: a little more than an
-# icon's width on the mini-map (NPC_RADIUS 16px / WORLD_SCALE 6, doubled,
+# icon's width on the mini-map (NPC_RADIUS 32px / WORLD_SCALE 6, doubled,
 # in mini_map/static/app.js), so neighbors never draw on top of each other,
 # yet still inside INTERACTION_RANGE -- walking up to someone gets you
 # close enough to talk.
-PERSONAL_SPACE = 7
+PERSONAL_SPACE = 12
 
 
 def keep_personal_space(

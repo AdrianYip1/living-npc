@@ -35,9 +35,9 @@
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
 const GRID_SIZE = 48;
-const NPC_RADIUS = 16;
+const NPC_RADIUS = 32;
 const PLAYER_RADIUS = NPC_RADIUS;
-const INTERACT_RANGE = 90; // world units; how close the player must be to talk
+const INTERACT_RANGE = 120; // world units; how close the player must be to talk
 const MAP_SIZE = 1200; // world units, arbitrary for now
 const MAP_HALF = MAP_SIZE / 2;
 const MAX_SPEED = 260; // world px/sec
@@ -71,10 +71,13 @@ const OVERHEARD_MAX_LINES = 40;
 
 const statusTime = document.getElementById("status-time");
 const statusWeather = document.getElementById("status-weather");
+const statusBackend = document.getElementById("status-backend");
 const statusGameMinutesPerRealMinute = document.getElementById("status-game-minutes-per-real-minute");
 const statusLlmCallsPerGameHour = document.getElementById("status-llm-calls-per-game-hour");
 const statusLlmCallsPerRealMinute = document.getElementById("status-llm-calls-per-real-minute");
 const statusPlaystate = document.getElementById("status-playstate");
+const cameraToggle = document.getElementById("camera-toggle");
+const statusPanel = document.getElementById("status-panel");
 const conversationEl = document.getElementById("conversation");
 const conversationTarget = document.getElementById("conversation-target");
 const conversationInput = document.getElementById("conversation-input");
@@ -99,6 +102,19 @@ let nearbyNPC = null;
 const camera = { x: 0, y: 0 };
 const velocity = { x: 0, y: 0 };
 
+// Camera mode. "follow" keeps the player centered at 1:1; "overview" pins
+// the view on the map center, zoomed out so the whole map fits in the
+// screen area the side panels leave clear. `view` is recomputed every frame
+// (see updateView) and is what all world -> screen conversions go through:
+// world point (x, y) lands on screen point (sx, sy), scaled by zoom.
+const OVERVIEW_MARGIN = 24; // screen px kept clear around the map in overview
+const CAMERA_TRANSITION_SECONDS = 0.5;
+const OVERVIEW_SETTLE_RATE = 10; // per sec; eases the fit when panels show/hide
+let cameraMode = "follow";
+let overviewBlend = 0; // 0 = follow, 1 = overview; animated toward cameraMode
+let overviewFit = null; // smoothed { sx, sy, zoom } of the overview framing
+const view = { x: 0, y: 0, zoom: 1, sx: 0, sy: 0 };
+
 // Direction the player is facing, in radians (0 = right, screen-space).
 // Derived from the actual velocity vector each frame (not the raw 8-way
 // key input) so the arrow follows the curve of accel/decel through turns
@@ -117,6 +133,9 @@ function applyState(data) {
   }
   if (typeof data.weather === "string") {
     statusWeather.textContent = data.weather;
+  }
+  if (typeof data.backend === "string" && data.backend) {
+    statusBackend.textContent = data.backend;
   }
   // The first (game_minutes_per_real_minute, derived server-side from
   // --ticks-per-real-minute and EnvironmentAgent's minutes_per_tick) and
@@ -301,7 +320,11 @@ let statePollFailed = false;
 
 async function pollState() {
   try {
-    const response = await fetch("/api/state");
+    // The player's position rides along, in backend coords: the server
+    // uses it to pick which nearby conversation the face renderer shows.
+    const px = (camera.x / WORLD_SCALE).toFixed(1);
+    const py = (camera.y / WORLD_SCALE).toFixed(1);
+    const response = await fetch(`/api/state?px=${px}&py=${py}`);
     if (!response.ok) {
       throw new Error(`status ${response.status}`);
     }
@@ -437,7 +460,7 @@ function layoutBubble(npc, bubble, sx, sy, side) {
 
   const width = Math.ceil(Math.max(textWidth, nameWidth) + BUBBLE_PADDING * 2);
   const height = BUBBLE_PADDING * 2 + BUBBLE_NAME_HEIGHT + lines.length * BUBBLE_LINE_HEIGHT;
-  const tipY = sy - NPC_RADIUS - 4;
+  const tipY = sy - NPC_RADIUS * view.zoom - 4;
   const corner = 8;
   const tailHalf = 6;
   // Keep the tail at least a corner's width inside the body.
@@ -537,7 +560,7 @@ function paintBubble(layout) {
   ctx.restore();
 }
 
-function drawBubbles(width, height) {
+function drawBubbles() {
   const byName = new Map(npcs.map((npc) => [npc.name, npc]));
   const layouts = [];
   for (const [name, bubble] of bubbles) {
@@ -551,7 +574,8 @@ function drawBubbles(width, height) {
     if (partner) {
       side = npc.x === partner.x ? (npc.name < partner.name ? -1 : 1) : Math.sign(npc.x - partner.x);
     }
-    layouts.push(layoutBubble(npc, bubble, width / 2 + (npc.x - camera.x), height / 2 + (npc.y - camera.y), side));
+    const screen = worldToScreen(npc.x, npc.y);
+    layouts.push(layoutBubble(npc, bubble, screen.x, screen.y, side));
   }
   // Painted oldest first, so a newer (lifted) bubble's tail draws over an
   // older bubble rather than disappearing behind it.
@@ -561,11 +585,11 @@ function drawBubbles(width, height) {
 }
 
 // A faint dashed link between each pair currently in conversation.
-function drawConversationLinks(width, height) {
+function drawConversationLinks() {
   const byName = new Map(npcs.map((npc) => [npc.name, npc]));
   ctx.save();
-  ctx.setLineDash([3, 4]);
-  ctx.lineWidth = 2;
+  ctx.setLineDash([3 / view.zoom, 4 / view.zoom]);
+  ctx.lineWidth = 2 / view.zoom;
   ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
   for (const npc of npcs) {
     const partner = npc.talkingTo ? byName.get(npc.talkingTo) : null;
@@ -573,71 +597,134 @@ function drawConversationLinks(width, height) {
       continue; // draw each pair once
     }
     ctx.beginPath();
-    ctx.moveTo(width / 2 + (npc.x - camera.x), height / 2 + (npc.y - camera.y));
-    ctx.lineTo(width / 2 + (partner.x - camera.x), height / 2 + (partner.y - camera.y));
+    ctx.moveTo(npc.x, npc.y);
+    ctx.lineTo(partner.x, partner.y);
     ctx.stroke();
   }
   ctx.restore();
 }
 
-function drawWorld() {
+// Screen rect left clear by the status panel (right) and the Overheard
+// panel (left). Overheard's column is reserved even while it's hidden, so
+// the framing doesn't jump when the first NPC-to-NPC line reveals it --
+// read from its computed style, which still resolves under display: none.
+// The conversation box isn't avoided -- it's fine for it to cover the map
+// while you're talking to someone.
+function overviewTarget() {
+  let left = 0;
+  let right = viewWidth;
+  const status = statusPanel.getBoundingClientRect();
+  if (status.width > 0) right = Math.min(right, status.left);
+  const overheardStyle = getComputedStyle(overheardEl);
+  const overheardRight = parseFloat(overheardStyle.left) + parseFloat(overheardStyle.width);
+  // On narrow screens Overheard spans the top instead of a side column;
+  // reserving its width there would leave no room for the map.
+  if (overheardRight < right - viewHeight * 0.5) {
+    left = Math.max(left, overheardRight);
+  }
+  const availW = right - left - OVERVIEW_MARGIN * 2;
+  const availH = viewHeight - OVERVIEW_MARGIN * 2;
+  return {
+    sx: (left + right) / 2,
+    sy: viewHeight / 2,
+    zoom: Math.max(0.1, Math.min(availW, availH) / MAP_SIZE),
+  };
+}
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function updateView(dt) {
+  const goal = cameraMode === "overview" ? 1 : 0;
+  const step = dt / CAMERA_TRANSITION_SECONDS;
+  overviewBlend = goal > overviewBlend ? Math.min(goal, overviewBlend + step) : Math.max(goal, overviewBlend - step);
+
+  const target = overviewTarget();
+  if (!overviewFit) {
+    overviewFit = { ...target };
+  } else {
+    const k = 1 - Math.exp(-OVERVIEW_SETTLE_RATE * dt);
+    overviewFit.sx += (target.sx - overviewFit.sx) * k;
+    overviewFit.sy += (target.sy - overviewFit.sy) * k;
+    overviewFit.zoom += (target.zoom - overviewFit.zoom) * k;
+  }
+
+  const t = easeInOutCubic(overviewBlend);
+  const lerp = (a, b) => a + (b - a) * t;
+  view.x = lerp(camera.x, 0);
+  view.y = lerp(camera.y, 0);
+  view.sx = lerp(viewWidth / 2, overviewFit.sx);
+  view.sy = lerp(viewHeight / 2, overviewFit.sy);
+  // Zoom interpolates geometrically so the zoom-out feels even throughout.
+  view.zoom = Math.exp(lerp(0, Math.log(overviewFit.zoom)));
+}
+
+function worldToScreen(x, y) {
+  return {
+    x: view.sx + (x - view.x) * view.zoom,
+    y: view.sy + (y - view.y) * view.zoom,
+  };
+}
+
+function drawWorld(dt) {
   const width = viewWidth;
   const height = viewHeight;
+  updateView(dt);
 
   // Void beyond the map border -- visible once the player nears an edge.
   ctx.fillStyle = "#0a0a0a";
   ctx.fillRect(0, 0, width, height);
 
-  const mapLeft = width / 2 + (-MAP_HALF - camera.x);
-  const mapTop = height / 2 + (-MAP_HALF - camera.y);
+  // Everything world-space is drawn under this transform, so it all scales
+  // together in overview; speech bubbles are laid out in screen space after.
+  ctx.save();
+  ctx.translate(view.sx, view.sy);
+  ctx.scale(view.zoom, view.zoom);
+  ctx.translate(-view.x, -view.y);
 
   ctx.fillStyle = "#1a1a1a";
-  ctx.fillRect(mapLeft, mapTop, MAP_SIZE, MAP_SIZE);
+  ctx.fillRect(-MAP_HALF, -MAP_HALF, MAP_SIZE, MAP_SIZE);
 
   ctx.save();
   ctx.beginPath();
-  ctx.rect(mapLeft, mapTop, MAP_SIZE, MAP_SIZE);
+  ctx.rect(-MAP_HALF, -MAP_HALF, MAP_SIZE, MAP_SIZE);
   ctx.clip();
 
   ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-  ctx.lineWidth = 1;
-  const offsetX = ((camera.x % GRID_SIZE) + GRID_SIZE) % GRID_SIZE;
-  const offsetY = ((camera.y % GRID_SIZE) + GRID_SIZE) % GRID_SIZE;
-
-  for (let x = -offsetX; x <= width; x += GRID_SIZE) {
+  ctx.lineWidth = 1 / view.zoom;
+  for (let x = -MAP_HALF; x <= MAP_HALF; x += GRID_SIZE) {
     ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
+    ctx.moveTo(x, -MAP_HALF);
+    ctx.lineTo(x, MAP_HALF);
     ctx.stroke();
   }
-  for (let y = -offsetY; y <= height; y += GRID_SIZE) {
+  for (let y = -MAP_HALF; y <= MAP_HALF; y += GRID_SIZE) {
     ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
+    ctx.moveTo(-MAP_HALF, y);
+    ctx.lineTo(MAP_HALF, y);
     ctx.stroke();
   }
 
-  drawConversationLinks(width, height);
+  drawConversationLinks();
 
   for (const npc of npcs) {
-    const sx = width / 2 + (npc.x - camera.x);
-    const sy = height / 2 + (npc.y - camera.y);
-    drawNpcIcon(npc, sx, sy, { nearby: npc === nearbyNPC, opacity: npc.opacity, dashed: npc.isTraveler });
+    drawNpcIcon(npc, npc.x, npc.y, { nearby: npc === nearbyNPC, opacity: npc.opacity, dashed: npc.isTraveler });
   }
 
   ctx.restore();
 
   ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(mapLeft, mapTop, MAP_SIZE, MAP_SIZE);
+  ctx.lineWidth = 2 / view.zoom;
+  ctx.strokeRect(-MAP_HALF, -MAP_HALF, MAP_SIZE, MAP_SIZE);
 
   ctx.beginPath();
-  ctx.arc(width / 2, height / 2, PLAYER_RADIUS, 0, Math.PI * 2);
+  ctx.arc(camera.x, camera.y, PLAYER_RADIUS, 0, Math.PI * 2);
   ctx.fillStyle = "#4caf50";
   ctx.fill();
 
   ctx.save();
-  ctx.translate(width / 2, height / 2);
+  ctx.translate(camera.x, camera.y);
   ctx.rotate(facingAngle);
   ctx.beginPath();
   ctx.moveTo(PLAYER_RADIUS * 0.55, 0);
@@ -648,7 +735,9 @@ function drawWorld() {
   ctx.fill();
   ctx.restore();
 
-  drawBubbles(width, height);
+  ctx.restore(); // world transform
+
+  drawBubbles();
 }
 
 let lastFrameTime = performance.now();
@@ -715,7 +804,7 @@ function tick(now) {
   }
 
   updateNearbyNPC();
-  drawWorld();
+  drawWorld(dt);
   requestAnimationFrame(tick);
 }
 
@@ -856,6 +945,7 @@ async function openConversation(npc) {
 }
 
 function closeConversation() {
+  cancelDictation();
   state.conversationOpen = false;
   const npc = conversationPartner;
   conversationPartner = null;
@@ -882,14 +972,162 @@ function isTypingTarget(target) {
   return target === conversationInput;
 }
 
+// Push-to-talk: holding Tab in an open conversation records the mic;
+// releasing it uploads the clip to /api/transcribe (local whisper, see
+// mini_map/speech.py) and sends whatever was heard. Anything already typed
+// is kept as a prefix. The mic stream is opened on the first press and held
+// until the conversation closes, so later presses start recording instantly.
+const dictation = {
+  stream: null,
+  recorder: null,
+  held: false,
+  transcribing: false,
+  // Bumped on cancel so a late permission grant, recorder stop, or
+  // transcription reply from an abandoned attempt is ignored.
+  session: 0,
+};
+const conversationPlaceholder = conversationInput.placeholder;
+const MIN_CLIP_BYTES = 1000; // anything smaller is a tap, not speech
+
+async function startDictation() {
+  if (dictation.held || dictation.recorder || dictation.transcribing || conversationInput.disabled) return;
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    appendLogLine("Speech input isn't supported in this browser.", { system: true });
+    return;
+  }
+  const session = dictation.session;
+  dictation.held = true;
+  conversationForm.classList.add("listening");
+  conversationInput.focus();
+
+  if (!dictation.stream) {
+    try {
+      dictation.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      if (session === dictation.session) {
+        dictation.held = false;
+        conversationForm.classList.remove("listening");
+        appendLogLine("Microphone access was denied.", { system: true });
+      }
+      return;
+    }
+  }
+  // Tab may have been released (or the conversation closed) while the
+  // permission prompt was up.
+  if (session !== dictation.session || !dictation.held) {
+    if (session === dictation.session) conversationForm.classList.remove("listening");
+    return;
+  }
+
+  const recorder = new MediaRecorder(dictation.stream);
+  const chunks = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data.size) chunks.push(event.data);
+  };
+  recorder.onstop = () => {
+    if (session !== dictation.session) return;
+    dictation.recorder = null;
+    transcribeClip(new Blob(chunks, { type: recorder.mimeType }), session);
+  };
+  dictation.recorder = recorder;
+  recorder.start();
+}
+
+function stopDictation() {
+  if (!dictation.held) return;
+  dictation.held = false;
+  if (dictation.recorder) {
+    dictation.recorder.stop();
+  } else {
+    conversationForm.classList.remove("listening");
+  }
+}
+
+async function transcribeClip(blob, session) {
+  conversationForm.classList.remove("listening");
+  if (blob.size < MIN_CLIP_BYTES) return;
+
+  const baseText = conversationInput.value.trim();
+  dictation.transcribing = true;
+  conversationInput.placeholder = "Transcribing...";
+  setConversationBusy(true);
+  let text = "";
+  let error = null;
+  try {
+    const response = await fetch("/api/transcribe", {
+      method: "POST",
+      headers: { "Content-Type": blob.type || "application/octet-stream" },
+      body: blob,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) {
+      text = (data.text || "").trim();
+    } else {
+      error = data.error || `HTTP ${response.status}`;
+    }
+  } catch (err) {
+    error = "lost connection";
+  }
+  if (session !== dictation.session) return; // cancelDictation already reset the UI
+
+  dictation.transcribing = false;
+  conversationInput.placeholder = conversationPlaceholder;
+  setConversationBusy(false);
+  conversationInput.focus();
+  if (error) {
+    appendLogLine(`Speech input failed (${error}).`, { system: true });
+    return;
+  }
+  if (!text) {
+    appendLogLine("Didn't catch that.", { system: true });
+    return;
+  }
+  conversationInput.value = [baseText, text].filter(Boolean).join(" ");
+  resizeConversationInput();
+  conversationForm.requestSubmit();
+}
+
+function cancelDictation() {
+  dictation.session += 1;
+  dictation.held = false;
+  if (dictation.recorder && dictation.recorder.state !== "inactive") {
+    dictation.recorder.stop();
+  }
+  dictation.recorder = null;
+  if (dictation.stream) {
+    dictation.stream.getTracks().forEach((track) => track.stop());
+    dictation.stream = null;
+  }
+  if (dictation.transcribing) {
+    dictation.transcribing = false;
+    conversationInput.placeholder = conversationPlaceholder;
+    setConversationBusy(false);
+  }
+  conversationForm.classList.remove("listening");
+}
+
 window.addEventListener("resize", resizeCanvas);
 
 statusPlaystate.addEventListener("click", () => setPaused(!state.paused));
+
+cameraToggle.addEventListener("click", () => {
+  cameraMode = cameraMode === "follow" ? "overview" : "follow";
+  cameraToggle.textContent = cameraMode === "follow" ? "View: Follow" : "View: Full map";
+  cameraToggle.blur(); // so Space keeps toggling pause, not this button
+});
 
 document.addEventListener("keydown", (event) => {
   if (event.code === "Escape" && state.conversationOpen) {
     event.preventDefault();
     closeConversation();
+    return;
+  }
+
+  // Tab would otherwise move focus off the input, so claim it whenever the
+  // conversation is open, typing or not.
+  if (event.code === "Tab" && state.conversationOpen) {
+    event.preventDefault();
+    if (!event.repeat) startDictation();
     return;
   }
 
@@ -921,10 +1159,13 @@ document.addEventListener("keydown", (event) => {
 
 document.addEventListener("keyup", (event) => {
   pressedKeys.delete(event.code);
+  if (event.code === "Tab") stopDictation();
 });
 
 window.addEventListener("blur", () => {
   pressedKeys.clear();
+  // The Tab keyup will never arrive once focus leaves the window.
+  stopDictation();
 });
 
 function resizeConversationInput() {

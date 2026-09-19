@@ -56,7 +56,7 @@ class _CountingLLM:
 
 _NPCS_JSON_KEYS = (
     "name", "traits", "backstory", "speech_style", "goals",
-    "home", "workplace", "habits", "starting_money", "starting_items",
+    "home", "workplace", "habits", "starting_money", "starting_items", "gender",
 )
 
 
@@ -336,7 +336,7 @@ class SimulationTickTests(unittest.TestCase):
             # If the target got ticked twice -- once inside the nested
             # conversation, once again independently by the outer loop --
             # Finn (who always just speaks) would pick up a second memory.
-            self.assertEqual(len(registry.get("Finn").memory.all()), 1)
+            self.assertEqual(len([m for m in registry.get("Finn").memory.all() if m.tags]), 1)
 
     def test_refused_conversation_leaves_the_target_free_to_act(self):
         with tempfile.TemporaryDirectory() as tmp:

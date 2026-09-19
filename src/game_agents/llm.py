@@ -73,7 +73,13 @@ class AnthropicLLMClient:
         self, *, system: str, messages: list[dict[str, str]], tools: list[dict[str, Any]]
     ) -> LLMResult:
         anthropic_tools = [
-            {"name": t["name"], "description": t["description"], "input_schema": t["parameters"]} for t in tools
+            {
+                "name": t["name"],
+                "description": t["description"],
+                "input_schema": t["parameters"],
+                **({"strict": True} if t.get("strict") else {}),
+            }
+            for t in tools
         ]
         response = self._client.messages.create(
             model=self._model,

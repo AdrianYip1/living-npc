@@ -53,6 +53,17 @@ class Inventory:
         listed = ", ".join(f"{count} x {name}" for name, count in sorted(self.items.items()))
         return f"You have {coins} and: {listed}."
 
+    def restock(self, stock: dict[str, int]) -> None:
+        """Tops each item up to at least its count in `stock` (a resident's
+        starting_items) -- never takes anything away, and leaves money
+        alone. The one change besides trade(): a resident's shelves refill
+        overnight instead of staying empty for good once sold out.
+        """
+        for item, count in stock.items():
+            have = self.count(item)
+            if have < count:
+                self._add(self.resolve(item), count - have)
+
     def _add(self, item: str, quantity: int) -> None:
         key = normalize_item(item)
         self.items[key] = self.items.get(key, 0) + quantity

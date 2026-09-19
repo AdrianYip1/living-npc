@@ -16,10 +16,12 @@ from concurrent.futures import wait as wait_futures
 from typing import Any
 
 from environment_agent.agent import EnvironmentAgent
+from environment_agent.time_of_day import MINUTES_PER_DAY
 from environment_agent.travelers import Traveler
 
 from game_agents.agent import Agent, Scene, TurnResult
 from game_agents.conversation import ConversationHooks, ConversationTurn
+from game_agents.conversation_export import PLAYER_PARTICIPANT, ConversationExporter, npc_participant
 from game_agents.identity import Identity
 from game_agents.llm import SPEAK_TOOL_NAME
 from game_agents.registry import NPCRegistry, conversation_happened
@@ -117,6 +119,14 @@ class Simulation:
     waits until the previous one has been up long enough to read (see
     _read_seconds()), and the pair stays together until the last one has
     too; pausing freezes that wait, same as the rest of the world.
+
+    Given an `exporter`, every conversation -- NPC-to-NPC and the player's
+    -- is also written out for the speech/animation program as it happens
+    (see game_agents.conversation_export), each line at the moment its
+    bubble goes up. active.json points that program at the player's own
+    conversation if there is one, otherwise at the NPC-to-NPC one nearest
+    the player (whose position the page reports -- see
+    set_player_position()).
     """
 
     MOVEMENT_HZ = 30.0
@@ -133,8 +143,8 @@ class Simulation:
     # Game-minutes a traveler stands idle before it's prompted again.
     TRAVELER_IDLE_TURN_MINUTES = 15
     # Game-minutes before a traveler that still hasn't left is sent to its
-    # exit point without asking -- a backstop for a model that never moves
-    # (e.g. the mock backend, which only ever speaks), not a script.
+    # exit point without asking -- a backstop for a model that never
+    # moves, not a script.
     TRAVELER_MAX_STAY_MINUTES = 4 * 60
     # How close counts as having reached the exit point, in map units.
     TRAVELER_EXIT_REACHED = 1.0
@@ -168,9 +178,20 @@ class Simulation:
         llm_calls_per_game_hour: float = 4.0,
         seed: int | None = None,
         line_pacing: bool = True,
+        exporter: ConversationExporter | None = None,
+        backend: str = "",
     ) -> None:
         self._registry = registry
+        # Which LLM backend is driving the NPCs (bootstrap's GAME_AGENTS_LLM
+        # name) -- only reported to the page, so a mock run is obvious.
+        self._backend = backend
         self._environment = environment
+        # The in-game day residents were last restocked on (see
+        # _advance_environment). Starts as the current day, restocked now:
+        # saved inventories carry over between runs, so a resident who sold
+        # out last session would otherwise stay empty until midnight.
+        self._restocked_day = environment.elapsed_minutes // MINUTES_PER_DAY
+        registry.restock_residents()
         self._ticks_per_real_minute = ticks_per_real_minute
         self._llm_calls_per_game_hour = llm_calls_per_game_hour
         self._tick_interval_s = 60.0 / ticks_per_real_minute
@@ -221,8 +242,17 @@ class Simulation:
         # Per conversation (keyed by the pair), the real monotonic time its
         # latest line has been up long enough to read.
         self._line_ready_at: dict[frozenset[str], float] = {}
+        # Conversations being exported (see the class docstring): NPC-to-NPC
+        # ones by pair, as (conversation id, [initiator, target]), and the
+        # player's as (conversation id, npc name).
+        self._exporter = exporter
+        self._exports: dict[frozenset[str], tuple[str, list[str]]] = {}
+        self._player_export: tuple[str, str] | None = None
+        self._export_lock = threading.Lock()
+        self._player_position: tuple[float, float] = (0.0, 0.0)
         registry.conversation_hooks = ConversationHooks(
             run=self._run_conversation,
+            on_start=self._on_conversation_start,
             scene=self._scene,
             on_turn=self._on_conversation_turn,
             on_end=self._on_conversation_end,
@@ -302,6 +332,8 @@ class Simulation:
             if not self._paused.is_set():
                 self._registry.step_movement(dt, hesitating=set(self._turns_in_flight))
                 self._update_travelers()
+            # Even while paused: the player can still talk to someone.
+            self.update_active_conversation()
             self._stop.wait(1.0 / self.MOVEMENT_HZ)
 
     def tick(self) -> None:
@@ -317,6 +349,11 @@ class Simulation:
 
     def _advance_environment(self) -> None:
         event = self._environment.tick()
+        day = self._environment.elapsed_minutes // MINUTES_PER_DAY
+        if day != self._restocked_day:
+            # A new in-game day: the residents' shelves refill.
+            self._restocked_day = day
+            self._registry.restock_residents()
         for traveler in event.travelers_arrived:
             if not self._submit(self._identity_pool, self._admit_traveler, traveler, event.clock):
                 return
@@ -653,6 +690,17 @@ class Simulation:
 
         return self._submit(self._conversation_pool, run)
 
+    def _on_conversation_start(self, initiator: str, target: str) -> None:
+        if self._exporter is None:
+            return
+        names = [initiator, target]
+        agents = [self._registry.get(name) for name in names]
+        if None in agents:
+            return
+        conversation_id = self._exporter.start([npc_participant(agent.identity) for agent in agents])
+        with self._export_lock:
+            self._exports[frozenset(names)] = (conversation_id, names)
+
     def _on_conversation_turn(self, turn: ConversationTurn) -> None:
         """Runs on the conversation's worker thread, right after a side
         decides its line: holds it until the previous line has been up long
@@ -669,6 +717,11 @@ class Simulation:
         )
         self._line_ready_at[key] = time.monotonic() + read_seconds
         self._last_activity[turn.speaker] = f"said to {turn.listener}: {turn.utterance}"
+        with self._export_lock:
+            export = self._exports.get(key)
+        speaker = self._registry.get(turn.speaker)
+        if export is not None and speaker is not None:
+            self._exporter.line(export[0], speaker.identity, turn.utterance)
 
     def _on_conversation_end(self, transcript: list[ConversationTurn]) -> None:
         """Keeps the pair together until the last line has been read, then
@@ -678,6 +731,7 @@ class Simulation:
             return
         a, b = transcript[0].speaker, transcript[0].listener
         self._hold_until(self._line_ready_at.pop(frozenset((a, b)), 0.0))
+        self._end_export(frozenset((a, b)))
         self._talked_at[frozenset((a, b))] = self._environment.elapsed_minutes
         self._last_activity[a] = f"talked with {b}"
         self._last_activity[b] = f"talked with {a}"
@@ -691,6 +745,47 @@ class Simulation:
                 st.talked_with = partner
             else:
                 self._just_talked.add(name)
+
+    def _end_export(self, key: frozenset[str]) -> None:
+        with self._export_lock:
+            export = self._exports.pop(key, None)
+        if export is not None:
+            self._exporter.end(export[0])
+
+    def set_player_position(self, x: float, y: float) -> None:
+        self._player_position = (x, y)
+
+    def update_active_conversation(self) -> None:
+        """Points active.json at the player's conversation if there is one,
+        otherwise the NPC-to-NPC one nearest the player (or at nothing).
+        Also ends the export of any NPC-to-NPC conversation whose pair was
+        let go without _on_conversation_end running (the exchange failed).
+        Cheap -- the file is only rewritten when the answer changes.
+        """
+        if self._exporter is None:
+            return
+        with self._export_lock:
+            player_export = self._player_export
+            exports = dict(self._exports)
+        for key, (_, (a, b)) in list(exports.items()):
+            if self._registry.partner_of(a) != b:
+                self._end_export(key)
+                exports.pop(key)
+        if player_export is not None:
+            self._exporter.point_at(player_export[0], [player_export[1]])
+            return
+        best: tuple[float, str, list[str]] | None = None
+        for conversation_id, names in exports.values():
+            agents = [self._registry.get(name) for name in names]
+            if None in agents:
+                continue
+            dist = min(distance(self._player_position, agent.position) for agent in agents)
+            if best is None or dist < best[0]:
+                best = (dist, conversation_id, names)
+        if best is None:
+            self._exporter.point_at(None, [])
+        else:
+            self._exporter.point_at(best[1], best[2])
 
     def _refuse_conversation(self, initiator: str, target: str) -> str | None:
         talked_at = self._talked_at.get(frozenset((initiator, target)))
@@ -770,17 +865,36 @@ class Simulation:
         so this NPC is skipped by both for as long as the player's talking
         to them, exactly as if they were mid-exchange with someone else.
         """
-        if self._registry.get(name) is None:
+        agent = self._registry.get(name)
+        if agent is None or not self._registry.try_occupy(name):
             return False
-        return self._registry.try_occupy(name)
+        if self._exporter is not None:
+            conversation_id = self._exporter.start([dict(PLAYER_PARTICIPANT), npc_participant(agent.identity)])
+            with self._export_lock:
+                previous, self._player_export = self._player_export, (conversation_id, name)
+            if previous is not None:
+                self._exporter.end(previous[0])
+        return True
 
     def end_conversation(self, name: str) -> None:
+        with self._export_lock:
+            export = self._player_export
+            if export is not None and export[1] == name:
+                self._player_export = None
+            else:
+                export = None
+        if export is not None:
+            self._exporter.end(export[0])
         self._registry.release(name)
 
     def say(self, name: str, text: str) -> dict[str, Any] | None:
         agent = self._registry.get(name)
         if agent is None:
             return None
+        with self._export_lock:
+            export = self._player_export
+        if export is not None and export[1] != name:
+            export = None
 
         scene = Scene(
             time=f"{self._environment.clock} ({self._environment.time_of_day.value})",
@@ -795,6 +909,9 @@ class Simulation:
         self._last_activity[name] = self._describe(result)
         if result.utterance is not None:
             self._publish_speech(name, "player", result.utterance)
+            if export is not None:
+                # A no-op if the player already walked off mid-reply.
+                self._exporter.line(export[0], agent.identity, result.utterance)
         return {
             "utterance": result.utterance,
             "action": None if result.action is None else {"name": result.action["name"]},
@@ -835,6 +952,7 @@ class Simulation:
             "time_of_day": self._environment.time_of_day.value,
             "weather": self._environment.weather.value,
             "paused": self.is_paused(),
+            "backend": self._backend,
             "game_minutes_per_real_minute": self._game_minutes_per_real_minute(),
             "llm_calls_per_game_hour": self._llm_calls_per_game_hour,
             "llm_calls_per_real_minute": self._llm_calls_per_real_minute(),
@@ -914,8 +1032,8 @@ def _traveler_brief(sketch: Traveler, purpose: TravelerPurpose) -> str:
 
 def _fallback_identity(sketch: Traveler, purpose: TravelerPurpose, *, money: int) -> Identity:
     """The environment agent's own sketch, filled out into an Identity
-    without an LLM -- used by the mock backend and whenever generation
-    fails (see generate_traveler_identity).
+    without an LLM -- used whenever generation fails (see
+    generate_traveler_identity).
     """
     return Identity(
         name=sketch.name,
@@ -925,4 +1043,5 @@ def _fallback_identity(sketch: Traveler, purpose: TravelerPurpose, *, money: int
         goals=[purpose.goal()],
         habits=["Wanders through town without lingering long"],
         starting_money=money,
+        gender=sketch.gender,
     )

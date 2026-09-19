@@ -40,6 +40,9 @@ class Identity:
     habits: list[str] = field(default_factory=list)
     starting_money: int = 0
     starting_items: dict[str, int] = field(default_factory=dict)
+    # "male" or "female" -- picks the voice and face on the speech/animation
+    # side (see conversation_export.py).
+    gender: str = ""
 
     def prompt_block(self, template: str = DEFAULT_PROFILE_TEMPLATE) -> str:
         return template.format(

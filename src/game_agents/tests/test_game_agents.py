@@ -502,8 +502,19 @@ class InitiateConversationToolTests(unittest.TestCase):
             self.assertFalse(registry.is_busy("Mara"))
             self.assertFalse(registry.is_busy("Finn"))
             # turns=2: Mara (the initiator) opens, then Finn -- one memory each
-            self.assertEqual(len(registry.get("Finn").memory.all()), 1)
-            self.assertEqual(len(registry.get("Mara").memory.all()), 1)
+            self.assertEqual(len([m for m in registry.get("Finn").memory.all() if m.tags]), 1)
+            self.assertEqual(len([m for m in registry.get("Mara").memory.all() if m.tags]), 1)
+
+    def test_both_sides_keep_an_untagged_recap_of_the_exchange(self):
+        # Untagged, so it surfaces talking to anyone -- not just the partner.
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, conversation_turns=2)
+            registry.get("Mara").tools.execute("initiate_conversation", {"target_name": "Finn"})
+            for name, partner in (("Mara", "Finn"), ("Finn", "Mara")):
+                recaps = [m for m in registry.get(name).memory.all() if not m.tags]
+                self.assertEqual(len(recaps), 1)
+                self.assertTrue(recaps[0].content.startswith(f"Earlier you talked with {partner}:"))
+                self.assertIn(recaps[0], registry.get(name).memory.retrieve(tags={"Someone Else"}))
 
     def test_refuses_when_target_already_busy(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -518,16 +529,16 @@ class InitiateConversationToolTests(unittest.TestCase):
     def test_refuses_when_target_is_out_of_range(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = self._registry(tmp, conversation_turns=2)
-            registry.get("Finn").position = (8, 7)  # ~10.6 away
+            registry.get("Finn").position = (10, 13)  # ~16.4 away
 
             result = registry.get("Mara").tools.execute("initiate_conversation", {"target_name": "Finn"})
 
-            self.assertIn("within 10", result)
+            self.assertIn("within 16", result)
             self.assertFalse(registry.is_busy("Mara"))
             self.assertFalse(registry.is_busy("Finn"))
             self.assertEqual(len(registry.get("Finn").memory.all()), 0)
 
-            registry.get("Finn").position = (6, 8)  # exactly 10 away: allowed
+            registry.get("Finn").position = (0, 16)  # exactly 16 away: allowed
             result = registry.get("Mara").tools.execute("initiate_conversation", {"target_name": "Finn"})
             self.assertIn("You had a conversation", result)
 
@@ -549,7 +560,7 @@ class InitiateConversationToolTests(unittest.TestCase):
 
             self.assertIn("Finn", result)
             self.assertNotIn("no one", result)
-            self.assertEqual(len(registry.get("Finn").memory.all()), 1)
+            self.assertEqual(len([m for m in registry.get("Finn").memory.all() if m.tags]), 1)
 
 
 class MoveToolTests(unittest.TestCase):
@@ -771,6 +782,12 @@ class InventoryTests(unittest.TestCase):
             "You have 7 coins and: 1 x anchor, 2 x fish.",
         )
 
+    def test_restock_tops_up_without_taking_anything_away(self):
+        inv = Inventory(money=3, items={"horseshoes": 1, "fish": 9})
+        inv.restock({"horseshoe": 4, "fish": 2, "hammer": 1})
+        self.assertEqual(inv.items, {"horseshoes": 4, "fish": 9, "hammer": 1})  # tops up the key it has
+        self.assertEqual(inv.money, 3)
+
 
 class TradeTests(unittest.TestCase):
     def test_successful_trade_moves_item_and_coins(self):
@@ -821,6 +838,17 @@ class InventoryToolTests(unittest.TestCase):
         if in_conversation:
             registry.try_occupy_pair("Mara", "Finn")
         return registry
+
+    def test_restock_refills_residents_but_not_travelers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = self._registry(tmp, in_conversation=False)
+            registry.get("Mara").inventory.items.clear()
+            wren = registry.add_traveler(_identity("Wren"), position=(0, 0))
+            wren.identity.starting_items = {"map": 1}
+            wren.inventory.items.clear()
+            registry.restock_residents()
+            self.assertEqual(registry.get("Mara").inventory.items, {"horseshoe": 3})
+            self.assertEqual(wren.inventory.items, {})
 
     def test_trade_refused_outside_a_conversation_with_the_other_side(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -927,15 +955,15 @@ class InventoryToolTests(unittest.TestCase):
     def test_trade_refused_when_npcs_are_out_of_range(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry = self._registry(tmp)
-            registry.get("Finn").position = (6, 8)  # exactly 10 away: allowed
+            registry.get("Finn").position = (0, 16)  # exactly 16 away: allowed
             ok = registry.get("Mara").tools.execute("buy_item", {"item": "fish", "seller_name": "Finn", "total_price": 1})
             self.assertIn("You bought", ok)
 
-            registry.get("Finn").position = (8, 7)  # ~10.6 away: refused
+            registry.get("Finn").position = (10, 13)  # ~16.4 away: refused
             refused = registry.get("Mara").tools.execute(
                 "sell_item", {"item": "horseshoe", "buyer_name": "Finn", "total_price": 1}
             )
 
-            self.assertIn("within 10", refused)
+            self.assertIn("within 16", refused)
             self.assertEqual(registry.get("Mara").inventory.count("horseshoe"), 3)
             self.assertEqual(registry.get("Finn").inventory.money, 6)  # only the first trade's coin

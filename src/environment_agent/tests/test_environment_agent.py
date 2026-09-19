@@ -28,7 +28,7 @@ class InventTravelerTests(unittest.TestCase):
     def test_fields_come_from_the_word_pools(self):
         traveler = invent_traveler(random.Random(7))
 
-        self.assertIn(traveler.name, _FIRST_NAMES)
+        self.assertIn((traveler.name, traveler.gender), _FIRST_NAMES)
         self.assertIn(traveler.origin, _ORIGINS)
         self.assertIn(traveler.reason, _REASONS)
         self.assertEqual(len(traveler.traits), 2)

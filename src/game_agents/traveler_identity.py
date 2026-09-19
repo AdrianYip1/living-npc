@@ -29,6 +29,7 @@ CREATE_IDENTITY_TOOL_SCHEMA: dict[str, Any] = {
         "type": "object",
         "properties": {
             "name": {"type": "string", "description": "First name only, one word."},
+            "gender": {"type": "string", "enum": ["male", "female"]},
             "traits": {"type": "array", "items": {"type": "string"}, "description": "2-4 short personality traits."},
             "backstory": {"type": "string", "description": "One or two sentences: who they are and why they're here."},
             "speech_style": {"type": "string", "description": "How they talk, in a few words."},
@@ -38,15 +39,27 @@ CREATE_IDENTITY_TOOL_SCHEMA: dict[str, Any] = {
                 "items": {"type": "string"},
                 "description": "2-3 short lines on how they spend their brief time in town.",
             },
-            "starting_money": {"type": "integer", "minimum": 0, "description": "Coins they carry."},
+            "starting_money": {"type": "integer", "description": "Coins they carry, 0 or more."},
+            # A list of pairs, not an item -> count map: strict tool use
+            # (below) can't express a map with free-form keys. _parse turns
+            # it back into the dict Identity keeps.
             "starting_items": {
-                "type": "object",
-                "additionalProperties": {"type": "integer", "minimum": 1},
-                "description": "Item name -> count; what a traveler like this would carry.",
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "item": {"type": "string"},
+                        "count": {"type": "integer", "description": "1 or more."},
+                    },
+                    "required": ["item", "count"],
+                    "additionalProperties": False,
+                },
+                "description": "What a traveler like this would carry.",
             },
         },
         "required": [
             "name",
+            "gender",
             "traits",
             "backstory",
             "speech_style",
@@ -55,7 +68,12 @@ CREATE_IDENTITY_TOOL_SCHEMA: dict[str, Any] = {
             "starting_money",
             "starting_items",
         ],
+        "additionalProperties": False,
     },
+    # Without it the model regularly answered with a list field as one
+    # comma-joined string or left a field out, and _parse rejected the whole
+    # identity -- most travelers ended up on the fallback.
+    "strict": True,
 }
 
 SYSTEM_PROMPT = (
@@ -93,11 +111,18 @@ def generate_traveler_identity(
         log.exception("traveler identity generation failed; using fallback")
         return fallback
 
+    # Every fallback is logged: a silent one looks just like a working
+    # backend with dull travelers.
     if result.tool_call.name != CREATE_IDENTITY_TOOL_NAME:
+        log.warning("traveler identity: model called %r instead; using fallback", result.tool_call.name)
         return fallback
 
     identity = _parse(result.tool_call.arguments, fallback)
-    if identity is None or identity.name.lower() in taken:
+    if identity is None:
+        log.warning("traveler identity: malformed arguments %r; using fallback", result.tool_call.arguments)
+        return fallback
+    if identity.name.lower() in taken:
+        log.warning("traveler identity: name %r is taken; using fallback", identity.name)
         return fallback
     return identity
 
@@ -105,6 +130,17 @@ def generate_traveler_identity(
 def _parse(arguments: dict[str, Any], fallback: Identity) -> Identity | None:
     fields = CREATE_IDENTITY_TOOL_SCHEMA["parameters"]["properties"]
     record = {key: arguments[key] for key in fields if key in arguments}
+    # Backends without strict tool use (DeepSeek) still sometimes send a
+    # list as one "a, b, c" string -- close enough to take.
+    for key in ("traits", "goals", "habits"):
+        if isinstance(record.get(key), str):
+            record[key] = [part.strip() for part in record[key].replace(";", ",").split(",") if part.strip()]
+    items = record.get("starting_items")
+    if isinstance(items, list):
+        try:
+            record["starting_items"] = {entry["item"]: entry["count"] for entry in items}
+        except (TypeError, KeyError):
+            return None
     record["home"] = fallback.home
     record["workplace"] = fallback.workplace
     try:
@@ -131,4 +167,8 @@ def _parse(arguments: dict[str, Any], fallback: Identity) -> Identity | None:
     if not valid:
         return None
     identity.name = identity.name.strip()
+    # Only the speech side reads it, so a bad value isn't worth losing the
+    # whole identity over -- the sketch's gender stands in.
+    gender = identity.gender.strip().lower() if isinstance(identity.gender, str) else ""
+    identity.gender = gender if gender in ("male", "female") else fallback.gender
     return identity

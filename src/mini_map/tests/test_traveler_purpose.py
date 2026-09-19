@@ -1,6 +1,5 @@
 """Why travelers stop in town (mini_map/traveler_purpose.py): rolled on
-arrival, threaded into what they're told, and -- with the chatty mock
-backend playing them -- actually acted on.
+arrival and threaded into what they're told.
 """
 from __future__ import annotations
 
@@ -14,7 +13,6 @@ from unittest import mock
 
 from environment_agent.agent import EnvironmentAgent
 
-from game_agents.chatty_mock import ChattyMockLLMClient
 from game_agents.identity import Identity
 from game_agents.llm import MockLLMClient
 from game_agents.registry import NPCRegistry
@@ -55,18 +53,6 @@ def _admit(sim: Simulation, purpose: TravelerPurpose):
         sim.wait_for_pending()
     (traveler,) = sim._registry.travelers()
     return traveler, sim._traveler_state[traveler.identity.name]
-
-
-def _run(sim: Simulation, seconds: float) -> None:
-    """Real-time-ish: movement at 30Hz, the clock at a game-minute per
-    real second, and every background turn/conversation settled per step.
-    """
-    for step in range(int(seconds * 30)):
-        sim._registry.step_movement(1 / 30, hesitating=set(sim._turns_in_flight))
-        if step % 30 == 0:
-            sim._environment.tick()
-        sim._update_travelers()
-        sim.wait_for_pending()
 
 
 class PickPurposeTests(unittest.TestCase):
@@ -156,42 +142,6 @@ class TimeInTownTests(unittest.TestCase):
             self.assertTrue(st.reminder(traveler, arrived + 45).endswith(" You've been in town 45 minutes so far."))
             self.assertTrue(st.reminder(traveler, arrived + 60).endswith(" You've been in town 1 hour so far."))
             self.assertTrue(st.reminder(traveler, arrived + 150).endswith(" You've been in town 2 hours 30 minutes so far."))
-
-
-class PurposeBehaviorTests(unittest.TestCase):
-    """The chatty mock playing each purpose through the real simulation."""
-
-    def test_a_buyer_goes_to_the_seller_and_buys_the_item(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            sim = _sim(tmp, ChattyMockLLMClient(seed=2))
-            traveler, st = _admit(sim, TravelerPurpose(BUY, place=_FORGE, item="horseshoe", seller="Mara"))
-
-            _run(sim, 12)
-
-            speech = sim.state()["speech"]
-            trades = [line["text"] for line in speech if line["kind"] == "trade"]
-            self.assertEqual(len(trades), 1)
-            self.assertRegex(trades[0], rf"^{traveler.identity.name} bought 1 x horseshoe from Mara for \d+ coins\.$")
-            self.assertTrue(any("I'm after a horseshoe" in line["text"] for line in speech))
-            self.assertEqual(sim._registry.get("Mara").inventory.count("horseshoe"), 3)
-
-    def test_a_visitor_goes_to_its_place_and_talks_to_whoever_is_there(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            sim = _sim(tmp, ChattyMockLLMClient(seed=2))
-            traveler, st = _admit(sim, TravelerPurpose(SOCIALIZE, place=_FORGE))
-
-            _run(sim, 12)
-
-            self.assertTrue(st.visited)
-            speakers = {line["speaker"] for line in sim.state()["speech"] if line["listener"]}
-            self.assertEqual(speakers, {traveler.identity.name, "Mara"})
-
-    def test_someone_passing_through_heads_straight_for_the_exit(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            sim = _sim(tmp, ChattyMockLLMClient(seed=2))
-            traveler, st = _admit(sim, TravelerPurpose(PASSING_THROUGH))
-
-            self.assertEqual(traveler.destination, st.exit_point)
 
 
 if __name__ == "__main__":

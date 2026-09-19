@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 
 from game_agents.agent import Agent
-from game_agents.chatty_mock import ChattyMockLLMClient
 from game_agents.conversation import ConversationHooks, run_conversation
 from game_agents.identity import Identity
 from game_agents.llm import ENDS_CONVERSATION_FIELD, SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
@@ -116,7 +114,7 @@ class ConversationHooksTests(unittest.TestCase):
             self.assertFalse(registry.is_busy("Mara"))
             self.assertIsNone(registry.partner_of("Finn"))
             self.assertEqual(len(ended), 1)
-            self.assertEqual(len(registry.get("Finn").memory.all()), 1)
+            self.assertEqual(len([m for m in registry.get("Finn").memory.all() if m.tags]), 1)
 
     def test_unschedulable_exchange_is_refused_and_released(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -157,101 +155,6 @@ class SurroundingsTests(unittest.TestCase):
 
     def test_empty_when_nobody_is_around(self):
         self.assertEqual(render_surroundings((0, 0), [("Far", (90, 90), False)]), "")
-
-
-class ChattyMockTests(unittest.TestCase):
-    def _tools(self, *names):
-        return [{"name": name, "description": "", "parameters": {"type": "object", "properties": {}}} for name in names]
-
-    def _speak(self, conversation=False):
-        properties = {"text": {"type": "string"}}
-        if conversation:
-            properties[ENDS_CONVERSATION_FIELD] = {"type": "boolean"}
-        return {"name": SPEAK_TOOL_NAME, "description": "", "parameters": {"type": "object", "properties": properties}}
-
-    def _act(self, llm, system, stimulus="It is now 08:00 (morning)."):
-        tools = [self._speak(), *self._tools("initiate_conversation", "move_to", "wait")]
-        return llm.complete(system=system, messages=[{"role": "user", "content": stimulus}], tools=tools).tool_call
-
-    def test_starts_a_conversation_with_someone_in_reach(self):
-        system = "You are Mara.\nYou are currently at (0, 0).\n" + render_surroundings((0, 0), [("Finn", (4, 0), False)])
-        calls = [self._act(ChattyMockLLMClient(seed=s), system) for s in range(10)]
-        self.assertIn(ToolCall(name="initiate_conversation", arguments={"target_name": "Finn"}), calls)
-
-    def test_never_approaches_someone_busy(self):
-        system = "You are Mara.\nYou are currently at (0, 0).\n" + render_surroundings((0, 0), [("Finn", (4, 0), True)])
-        for seed in range(10):
-            self.assertNotEqual(self._act(ChattyMockLLMClient(seed=seed), system).name, "initiate_conversation")
-
-    def test_resident_heads_to_work_in_the_morning(self):
-        system = "You are Mara.\nWorkplace: (12, -30)\nYou are currently at (-40, 15).\nTime: 08:00 (morning)"
-        self.assertEqual(
-            self._act(ChattyMockLLMClient(seed=1), system), ToolCall(name="move_to", arguments={"x": 12, "y": -30})
-        )
-
-    _BUYER = (
-        "You are Wren, a traveler.\nYour exit point: (100, 5), on the edge of the map.\n"
-        "You've stopped in town to buy horseshoe from Mara, who works at The Forge at (12, -30).\n"
-        "You are currently at (12, -22).\n"
-    )
-
-    def test_buyer_starts_talking_to_its_seller(self):
-        system = self._BUYER + render_surroundings((12, -22), [("Mara", (12, -30), False), ("Finn", (14, -22), False)])
-        call = self._act(ChattyMockLLMClient(seed=1), system, "You've reached (12, -22).")
-        self.assertEqual(call, ToolCall(name="initiate_conversation", arguments={"target_name": "Mara"}))
-
-    def test_buyer_heads_for_its_exit_once_it_has_bought(self):
-        call = self._act(ChattyMockLLMClient(seed=1), self._BUYER, "You've bought the horseshoe you came for.")
-        self.assertEqual(call, ToolCall(name="move_to", arguments={"x": 100, "y": 5}))
-
-    def test_buyer_asks_the_price_then_buys_at_it(self):
-        llm = ChattyMockLLMClient(seed=1)
-        buyer = Agent(_identity("Wren"), llm, standing_context=self._BUYER)
-        seller = Agent(_identity("Mara"), llm)
-        tools = ToolRegistry()
-        bought = []
-        tools.register(
-            Tool(
-                name="buy_item",
-                description="",
-                parameters={"type": "object", "properties": {}},
-                handler=lambda **kwargs: bought.append(kwargs) or "You bought it.",
-            )
-        )
-        buyer.tools = tools
-
-        transcript = run_conversation(buyer, seller, turns=6)
-
-        self.assertEqual(transcript[0].utterance, "Hello, Mara. I'm after a horseshoe. What's your price?")
-        self.assertRegex(transcript[1].utterance, r"^\d coins for the horseshoe")
-        self.assertEqual(transcript[2].action["name"], "buy_item")
-        self.assertEqual(bought[0]["item"], "horseshoe")
-        self.assertEqual(bought[0]["seller_name"], "Mara")
-
-    def test_holds_a_short_conversation_that_ends_on_a_goodbye(self):
-        llm = ChattyMockLLMClient(seed=3)
-        a, b = Agent(_identity("Al"), llm), Agent(_identity("Bo"), llm)
-
-        transcript = run_conversation(a, b, turns=20)
-
-        self.assertGreaterEqual(len(transcript), 3)
-        self.assertLess(len(transcript), 20)
-        self.assertTrue(any(t.ends_conversation for t in transcript))
-        self.assertIn("Bo", transcript[0].utterance)
-
-    def test_is_safe_to_share_across_threads(self):
-        llm = ChattyMockLLMClient(seed=1)
-        system = "You are Mara.\nYou are currently at (0, 0)."
-        threads = [threading.Thread(target=self._act, args=(llm, system)) for _ in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-    def test_identity_requests_fall_back_like_the_plain_mock(self):
-        tools = self._tools("create_identity")
-        call = ChattyMockLLMClient().complete(system="", messages=[], tools=tools).tool_call
-        self.assertNotEqual(call.name, "create_identity")
 
 
 class SoakRegressionTests(unittest.TestCase):
@@ -332,7 +235,7 @@ class SoakRegressionTests(unittest.TestCase):
         self.assertEqual(len(transcript), 2)
 
     def test_walking_to_someone_stops_in_front_of_them(self):
-        self.assertEqual(keep_personal_space((12, -30), (40, -30), [(12, -30)]), (19, -30))
+        self.assertEqual(keep_personal_space((12, -30), (40, -30), [(12, -30)]), (24, -30))
 
     def test_a_clear_destination_is_left_alone(self):
         self.assertEqual(keep_personal_space((12, -30), (40, -30), [(30, 30)]), (12, -30))
@@ -357,8 +260,8 @@ class SoakRegressionTests(unittest.TestCase):
             taken.append(spot)
 
     def test_icons_do_not_overlap_at_personal_space(self):
-        # NPC_RADIUS 16px and WORLD_SCALE 6 in app.js: an icon is ~5.3 units wide.
-        self.assertGreater(PERSONAL_SPACE, 2 * 16 / 6)
+        # NPC_RADIUS 32px and WORLD_SCALE 6 in app.js: an icon is ~10.7 units wide.
+        self.assertGreater(PERSONAL_SPACE, 2 * 32 / 6)
         self.assertLess(PERSONAL_SPACE, INTERACTION_RANGE)
 
     def test_move_tool_keeps_personal_space(self):
@@ -369,8 +272,8 @@ class SoakRegressionTests(unittest.TestCase):
 
             result = registry.get("Wren").tools.execute("move_to", {"x": 12, "y": -30})
 
-            self.assertEqual(registry.get("Wren").destination, (19, -30))
-            self.assertIn("(19, -30)", result)
+            self.assertEqual(registry.get("Wren").destination, (24, -30))
+            self.assertIn("(24, -30)", result)
 
 
 if __name__ == "__main__":

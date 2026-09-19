@@ -69,10 +69,28 @@ class GenerateTravelerIdentityTests(unittest.TestCase):
         self.assertIs(generate_traveler_identity(llm, "brief", fallback=_FALLBACK), _FALLBACK)
 
     def test_malformed_field_falls_back(self):
-        for key, bad in [("traits", "wry"), ("starting_money", -5), ("starting_items", {"map": "one"}), ("name", "  ")]:
-            with self.subTest(key=key):
+        for key, bad in [
+            ("traits", 5),
+            ("starting_money", -5),
+            ("starting_items", {"map": "one"}),
+            ("starting_items", [{"item": "map"}]),
+            ("name", "  "),
+        ]:
+            with self.subTest(key=key, bad=bad):
                 llm = _FixedLLM(CREATE_IDENTITY_TOOL_NAME, {**_GOOD_ARGUMENTS, key: bad})
-                self.assertIs(generate_traveler_identity(llm, "brief", fallback=_FALLBACK), _FALLBACK)
+                with self.assertLogs("game_agents.traveler_identity", level="WARNING"):
+                    self.assertIs(generate_traveler_identity(llm, "brief", fallback=_FALLBACK), _FALLBACK)
+
+    def test_items_as_list_of_pairs(self):
+        items = [{"item": "map", "count": 1}, {"item": "ink", "count": 2}]
+        llm = _FixedLLM(CREATE_IDENTITY_TOOL_NAME, {**_GOOD_ARGUMENTS, "starting_items": items})
+        identity = generate_traveler_identity(llm, "brief", fallback=_FALLBACK)
+        self.assertEqual(identity.starting_items, {"map": 1, "ink": 2})
+
+    def test_comma_joined_list_fields_are_split(self):
+        llm = _FixedLLM(CREATE_IDENTITY_TOOL_NAME, {**_GOOD_ARGUMENTS, "traits": "wry, patient; tired"})
+        identity = generate_traveler_identity(llm, "brief", fallback=_FALLBACK)
+        self.assertEqual(identity.traits, ["wry", "patient", "tired"])
 
     def test_extra_fields_are_ignored(self):
         llm = _FixedLLM(CREATE_IDENTITY_TOOL_NAME, {**_GOOD_ARGUMENTS, "home": [5, 5], "favorite_color": "red"})

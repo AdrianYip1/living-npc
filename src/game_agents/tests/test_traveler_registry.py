@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from game_agents.agent import Agent
 from game_agents.bootstrap import INSTRUCTIONS_PATH
 from game_agents.identity import Identity
 from game_agents.llm import SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
@@ -153,11 +154,11 @@ class TravelerConversationTests(unittest.TestCase):
             result = wren.tools.execute("initiate_conversation", {"target_name": "Mara"})
 
             self.assertTrue(result.startswith("You had a conversation with Mara"))
-            wren_lines = [m.content for m in wren.memory.all()]
+            wren_lines = [m.content for m in wren.memory.all() if m.tags]  # per-turn, not the recap
             self.assertTrue(wren_lines)
             for line in wren_lines:
                 said = line.split(" -> ", 1)[1]
-                self.assertLessEqual(len(said.split()), NPCRegistry.TRAVELER_MAX_WORDS)
+                self.assertLessEqual(len(said.split()), NPCRegistry.TRAVELER_MAX_WORDS * Agent.HARD_CAP_FACTOR)
             self.assertFalse(registry.is_busy("Wren"))
 
     def test_traveler_out_of_range_is_refused(self):
@@ -199,11 +200,27 @@ class TravelerPromptTests(unittest.TestCase):
             registry = _registry(tmp, llm)
             agent = registry.add_traveler(_identity("Wren"), position=(0, 0))
 
+            # No sentence end within the hard cap: cut there, with "...".
             utterance = agent.respond("hello").utterance
-            self.assertEqual(len(utterance.split()), NPCRegistry.TRAVELER_MAX_WORDS)
+            self.assertEqual(len(utterance.split()), NPCRegistry.TRAVELER_MAX_WORDS * Agent.HARD_CAP_FACTOR)
             self.assertTrue(utterance.endswith("..."))
             speak = next(t for t in llm.last_tools if t["name"] == SPEAK_TOOL_NAME)
             self.assertIn(f"at most {NPCRegistry.TRAVELER_MAX_WORDS} words", speak["description"])
+
+    def test_a_little_over_the_limit_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            line = " ".join(f"word{i}" for i in range(NPCRegistry.TRAVELER_MAX_WORDS + 3)) + "."
+            llm = _RecordingLLM(ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": line}))
+            agent = _registry(tmp, llm).add_traveler(_identity("Wren"), position=(0, 0))
+            self.assertEqual(agent.respond("hello").utterance, line)
+
+    def test_a_long_line_is_trimmed_to_its_last_whole_sentence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = "Rough road behind me, friend. Snow came early this year!"
+            line = first + " " + " ".join(f"word{i}" for i in range(40))
+            llm = _RecordingLLM(ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": line}))
+            agent = _registry(tmp, llm).add_traveler(_identity("Wren"), position=(0, 0))
+            self.assertEqual(agent.respond("hello").utterance, first)
 
     def test_resident_speech_is_not_capped(self):
         with tempfile.TemporaryDirectory() as tmp:

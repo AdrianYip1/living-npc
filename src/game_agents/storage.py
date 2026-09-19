@@ -7,7 +7,7 @@ from .identity import Identity
 from .inventory import Inventory
 from .memory import MemoryStore
 
-_IDENTITY_FIELDS = ("name", "traits", "backstory", "speech_style", "goals", "home", "workplace", "habits", "starting_money", "starting_items")
+_IDENTITY_FIELDS = ("name", "traits", "backstory", "speech_style", "goals", "home", "workplace", "habits", "starting_money", "starting_items", "gender")
 _COORD_FIELDS = ("home", "workplace")
 
 

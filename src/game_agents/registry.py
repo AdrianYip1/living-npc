@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from .agent import Agent
-from .conversation import ConversationHooks, run_conversation, save_transcript
+from .conversation import ConversationHooks, conversation_recap, run_conversation, save_transcript
 from .identity import DEFAULT_PROFILE_TEMPLATE
 from .inventory import TradeError, trade
 from .llm import LLMClient
@@ -166,6 +166,15 @@ class NPCRegistry:
     def residents(self) -> list[Agent]:
         return [agent for agent in self.all() if agent.identity.name not in self._travelers]
 
+    def restock_residents(self) -> None:
+        """Refills every resident's items up to their starting_items (see
+        Inventory.restock). Travelers bring what they bring. Under the trade
+        lock, so it can't land in the middle of a trade.
+        """
+        with self._trade_lock:
+            for agent in self.residents():
+                agent.inventory.restock(agent.identity.starting_items)
+
     def travelers(self) -> list[Agent]:
         return [agent for agent in self.all() if agent.identity.name in self._travelers]
 
@@ -325,9 +334,14 @@ class NPCRegistry:
 
             def exchange() -> None:
                 try:
+                    if hooks.on_start is not None:
+                        hooks.on_start(initiator_name, resolved_name)
                     transcript = run_conversation(
                         initiator, target, turns=turns, scene=hooks.scene, on_turn=hooks.on_turn
                     )
+                    if transcript:
+                        for agent in (initiator, target):
+                            agent.memory.add(conversation_recap(transcript, agent.identity.name), importance=6)
                     if self._conversation_log_dir is not None:
                         log_path = (
                             self._conversation_log_dir

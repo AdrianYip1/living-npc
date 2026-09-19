@@ -63,6 +63,9 @@ class Agent:
     prompt -> call -> record -> return.
     """
 
+    # How far past max_utterance_words a line may run before it's trimmed.
+    HARD_CAP_FACTOR = 2
+
     def __init__(
         self,
         identity: Identity,
@@ -85,8 +88,9 @@ class Agent:
         # Extra, always-on lines for this one agent's system prompt, right
         # after its identity -- e.g. a traveler's exit point.
         self.standing_context = standing_context
-        # None = unlimited. Otherwise the speak tool tells the model the cap
-        # and any longer line is cut down to it (see respond()).
+        # None = unlimited. Otherwise the speak tool asks the model to keep
+        # to it, and only a line well past it (HARD_CAP_FACTOR times) gets
+        # cut -- back to its last whole sentence (see _cap_utterance()).
         self.max_utterance_words = max_utterance_words
         # Dynamic, unlike home/workplace on Identity -- spawns at home. The
         # move tool (see registry.py) only sets `destination`; the NPC then
@@ -214,12 +218,22 @@ class Agent:
         return schema
 
     def _cap_utterance(self, text: str) -> str:
+        """The word limit is a request, not a guillotine: cutting a line at
+        exactly N words left half-sentences the other side then answered.
+        Only a line well past it is trimmed, to its last complete sentence
+        within the hard cap (or cut with "..." if it has none).
+        """
         if self.max_utterance_words is None:
             return text
+        hard_cap = self.max_utterance_words * self.HARD_CAP_FACTOR
         words = text.split()
-        if len(words) <= self.max_utterance_words:
+        if len(words) <= hard_cap:
             return text
-        return " ".join(words[: self.max_utterance_words]) + "..."
+        kept = " ".join(words[:hard_cap])
+        end = max(kept.rfind(mark) for mark in ".!?")
+        if end > 0:
+            return kept[: end + 1]
+        return kept + "..."
 
     def _build_system_prompt(self, scene: Scene, memories: list[Memory]) -> str:
         parts = []

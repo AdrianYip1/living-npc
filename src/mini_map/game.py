@@ -24,11 +24,14 @@ import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from environment_agent.agent import EnvironmentAgent
 
 from game_agents.bootstrap import CONVERSATION_LOG_DIR, build_registry
+from game_agents.conversation_export import ConversationExporter
 
+from . import speech
 from .simulation import Simulation
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -59,12 +62,24 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
     def do_GET(self) -> None:
-        if self.path == "/api/state":
+        url = urlsplit(self.path)
+        if url.path == "/api/state":
+            self._note_player_position(parse_qs(url.query))
             self._send_json(200, _simulation.state())
             return
         super().do_GET()
 
+    def _note_player_position(self, query: dict[str, list[str]]) -> None:
+        try:
+            _simulation.set_player_position(float(query["px"][0]), float(query["py"][0]))
+        except (KeyError, ValueError):
+            pass
+
     def do_POST(self) -> None:
+        # Raw audio, not JSON, so it skips the JSON routes below.
+        if self.path == "/api/transcribe":
+            self._handle_transcribe()
+            return
         routes = {
             "/api/conversation/start": self._handle_conversation_start,
             "/api/conversation/end": self._handle_conversation_end,
@@ -100,6 +115,20 @@ class Handler(SimpleHTTPRequestHandler):
     def _handle_resume(self, body: dict) -> None:
         _simulation.resume()
         self._send_json(200, {"paused": False})
+
+    def _handle_transcribe(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        audio = self.rfile.read(length) if length else b""
+        try:
+            text = speech.transcribe(audio)
+        except speech.SpeechUnavailable as err:
+            self._send_json(503, {"error": str(err)})
+            return
+        except Exception:
+            logging.exception("transcription failed")
+            self._send_json(500, {"error": "transcription failed"})
+            return
+        self._send_json(200, {"text": text})
 
     def _read_json_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0))
@@ -143,12 +172,17 @@ def run(
     global _simulation
 
     _print_actions()
-    _clear_conversation_logs()
+    # Each run starts with an empty conversation_log/, so what's in there
+    # is only ever this session's conversations.
+    exporter = ConversationExporter(CONVERSATION_LOG_DIR)
+    exporter.clear()
     registry, backend = build_registry()
     environment = EnvironmentAgent(travelers_per_day=TRAVELERS_PER_DAY)
     _simulation = Simulation(
         registry,
         environment,
+        exporter=exporter,
+        backend=backend,
         ticks_per_real_minute=ticks_per_real_minute,
         llm_calls_per_game_hour=llm_calls_per_game_hour,
     )
@@ -189,14 +223,6 @@ def run(
             )
 
 
-def _clear_conversation_logs() -> None:
-    """Each run starts with an empty conversation_log/, so what's in there
-    is only ever this session's conversations.
-    """
-    for path in CONVERSATION_LOG_DIR.glob("*.json"):
-        path.unlink()
-
-
 def _print_actions() -> None:
     """Every action an NPC takes (see game_agents.agent.action_log), one
     line each on the console. Only that logger -- the root logger stays
@@ -214,6 +240,12 @@ def _print_actions() -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch the living-npc mini-map.")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=PORT,
+        help=f"Port to serve the UI on. Default: {PORT}",
+    )
     parser.add_argument(
         "--ticks-per-real-minute",
         type=float,
@@ -239,4 +271,4 @@ def _parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = _parse_args()
-    run(ticks_per_real_minute=args.ticks_per_real_minute, llm_calls_per_game_hour=args.llm_calls_per_game_hour)
+    run(port=args.port, ticks_per_real_minute=args.ticks_per_real_minute, llm_calls_per_game_hour=args.llm_calls_per_game_hour)

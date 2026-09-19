@@ -39,6 +39,8 @@ class ConversationHooks:
     - run: schedules an exchange (a no-arg callable) somewhere else, e.g. a
       worker thread, instead of running it inside the initiator's tool call.
       Returns False if it couldn't be scheduled.
+    - on_start: called with (initiator, target) once the pair is claimed,
+      just before the first turn.
     - scene: the current time/weather, as each turn starts.
     - on_turn: called with each turn as soon as it's decided -- and may
       block, which is how the simulation paces lines out for reading.
@@ -50,6 +52,7 @@ class ConversationHooks:
     """
 
     run: Callable[[Callable[[], None]], bool] | None = None
+    on_start: Callable[[str, str], None] | None = None
     scene: Callable[[], Scene] | None = None
     on_turn: Callable[[ConversationTurn], None] | None = None
     on_end: Callable[[list[ConversationTurn]], None] | None = None
@@ -128,6 +131,23 @@ def run_conversation(
         stimulus = f'{speaker.identity.name} says: "{result.utterance}"'
         speaker, other = other, speaker
     return transcript
+
+
+def conversation_recap(transcript: list[ConversationTurn], name: str) -> str:
+    """The whole exchange as `name` remembers it afterwards. Stored
+    untagged (see NPCRegistry), so it surfaces whoever they talk to next --
+    the per-turn memories are tagged with the partner and only come back
+    around them, which left an NPC asking a second person what the first
+    had just told it.
+    """
+    partner = next((t.listener if t.speaker == name else t.speaker for t in transcript), "someone")
+    lines = []
+    for turn in transcript:
+        if turn.utterance is not None:
+            lines.append(f"{turn.speaker}: {turn.utterance}")
+        elif turn.action is not None:
+            lines.append(f"({turn.speaker}: {turn.action['name']} -- {turn.action['result']})")
+    return f"Earlier you talked with {partner}:\n" + "\n".join(f"  {line}" for line in lines)
 
 
 def _conversation_context(speaker: Agent, other: Agent, lines: list[str], *, opening: bool, closing: bool) -> str:

@@ -17,6 +17,10 @@
       <span id="status-weather" class="value">--</span>
     </div>
     <div class="status-row status-row--labeled">
+      <span class="label" title="Which LLM backend drives the NPCs (GAME_AGENTS_LLM)">Backend</span>
+      <span id="status-backend" class="value">--</span>
+    </div>
+    <div class="status-row status-row--labeled">
       <span class="label" title="How many in-game minutes pass per real minute -- controls how fast the clock runs">Game-min/real-min</span>
       <span id="status-game-minutes-per-real-minute" class="value">--</span>
     </div>
@@ -31,6 +35,9 @@
     <div class="status-row">
       <button id="status-playstate" class="value playstate-btn" type="button">Paused</button>
     </div>
+    <div class="status-row">
+      <button id="camera-toggle" class="value playstate-btn" type="button" title="Toggle between following the player and a zoomed-out view of the whole map">View: Follow</button>
+    </div>
   </aside>
 
   <aside id="overheard" class="hidden" aria-live="polite">
@@ -42,7 +49,7 @@
     <div id="conversation-target"></div>
     <div id="conversation-log"></div>
     <form id="conversation-form" autocomplete="off">
-      <textarea id="conversation-input" rows="1" placeholder="Type to talk to an NPC..."></textarea>
+      <textarea id="conversation-input" rows="1" placeholder="Type, or hold Tab to speak..."></textarea>
       <button type="submit">Send</button>
     </form>
   </div>
