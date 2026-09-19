@@ -55,7 +55,8 @@ void HTN::Drawing::createCommandBuffer() {
 
 void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex,
 										const std::map<std::string, std::vector<VkDescriptorSet>>& materialSets,
-										u32 currentFrame, Model& model) {
+										u32 currentFrame, Model& model,
+										Model* sceneModel, Pipeline* scenePipeline) {
 	VkCommandBufferBeginInfo beginInfo{};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -92,6 +93,12 @@ void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapch
 	scissor.offset = { 0, 0 };
 	scissor.extent = device.getExtent();
 	vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+	if (sceneModel && scenePipeline) {
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scenePipeline->getGraphicsPipeline());
+		sceneModel->bind(commandBuffer);
+		sceneModel->draw(commandBuffer, scenePipeline->getPipelineLayout(), materialSets, currentFrame, 0);
+	}
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.getGraphicsPipeline());
 	model.bind(commandBuffer);

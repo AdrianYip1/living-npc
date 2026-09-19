@@ -23,7 +23,8 @@ namespace HTN {
 		VkCommandBuffer getCommandBuffer(u32 frame) { return commandBuffers[frame]; }
 		void recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex,
 							 const std::map<std::string, std::vector<VkDescriptorSet>>& materialSets,
-							 u32 currentFrame, Model& model);
+							 u32 currentFrame, Model& model,
+							 Model* sceneModel = nullptr, Pipeline* scenePipeline = nullptr);
 		void createFramebuffer();
 
 	private:

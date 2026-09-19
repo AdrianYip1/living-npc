@@ -7,12 +7,15 @@
 #include <GLFW/glfw3.h>
 
 #include <enginemath/mat4.hpp>
+#include <fstream>
 
 HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	window(_window),
 	camera(_camera),
 	device(_window),
 	pipeline(device, "shaders/shader.vert.spv", "shaders/shader.frag.spv"),
+	scenePipeline(device, "shaders/shader.vert.spv", "shaders/shader.frag.spv",
+				  pipeline.getRenderpass(), pipeline.getUboSetLayout()),
 	drawing(device, pipeline),
 	uniform(device) {
 
@@ -21,6 +24,7 @@ HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 
 	inverseBindMatrices = fmodel.inverseBindMatrix;
 	Model::createModel(device, std::move(fmodel), &model);
+	loadScene();
 	createTextures();
 	createDescriptors();
 	initImGui();
@@ -105,7 +109,9 @@ void HTN::Renderer::drawFrame() {
 	ImGui::Render();
 
 	drawing.recordCommandBuffer(drawing.getCommandBuffer(currentFrame), swapchainImageIndex,
-								materialSets, currentFrame, model);
+								materialSets, currentFrame, model,
+								hasScene ? &sceneModel : nullptr,
+								hasScene ? &scenePipeline : nullptr);
 
 	VkSubmitInfo submitInfo{};
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -151,6 +157,19 @@ void HTN::Renderer::drawFrame() {
 	currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
+void HTN::Renderer::loadScene() {
+	const std::string scenePath = "models/scene_opt/background3.gltf";
+	std::ifstream test(scenePath);
+	if (!test.good()) return;
+	test.close();
+
+	fModel sceneFmodel;
+	Skeleton throwaway;
+	Loader::loadModel(scenePath, sceneFmodel, throwaway, true);
+	Model::createModel(device, std::move(sceneFmodel), &sceneModel);
+	hasScene = true;
+}
+
 void HTN::Renderer::createSyncObjects() {
 	imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
 	renderFinishedSemaphores.resize(device.getSwapchainImageViews().size());
@@ -183,6 +202,14 @@ void HTN::Renderer::createTextures() {
 			textures[s.textureUri] = std::make_unique<Texture>(device, path);
 		}
 	}
+	if (hasScene) {
+		for (const submesh& s : sceneModel.getPrimitives()) {
+			if (!s.textureUri.empty() && textures.find(s.textureUri) == textures.end()) {
+				std::string path = "models/scene_opt/" + s.textureUri;
+				textures[s.textureUri] = std::make_unique<Texture>(device, path);
+			}
+		}
+	}
 	if (textures.find("") == textures.end()) {
 		textures[""] = std::make_unique<Texture>(device, "models/white.png");
 	}
@@ -199,7 +226,7 @@ void HTN::Renderer::createDescriptors() {
 		descriptorPool, materialCount);
 
 	VkBuffer deltasBuffer = model.getDeltasBuffer();
-	VkBuffer instanceBuf = model.getInstanceBuffer();
+	VkBuffer instanceBuf = hasScene ? sceneModel.getInstanceBuffer() : model.getInstanceBuffer();
 
 	for (auto& [uri, tex] : textures) {
 		VkDescriptorImageInfo imageInfo{};

@@ -6,3 +6,4 @@ out/
 *.exe
 src/secrets.hpp
 external/speechsdk/
+models/scene_opt/

@@ -34,9 +34,11 @@ namespace HTN {
 		Camera& camera;
 		Device device;
 		Pipeline pipeline;
+		Pipeline scenePipeline;
 		Drawing drawing;
 		Uniform uniform;
 		Model model;
+		Model sceneModel;
 		Skeleton skeleton;
 
 		std::unique_ptr<faceAnim> animator;
@@ -57,9 +59,12 @@ namespace HTN {
 		std::vector<VkSemaphore> renderFinishedSemaphores;
 		std::vector<VkFence> inFlightFences;
 
+		bool hasScene = false;
+
 		void createSyncObjects();
 		void createTextures();
 		void createDescriptors();
 		void initImGui();
+		void loadScene();
 	};
 } // namespace HTN
