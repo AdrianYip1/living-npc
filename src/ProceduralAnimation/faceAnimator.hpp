@@ -18,6 +18,7 @@
 #include <cmath>
 #include <memory>
 #include <cstdint>
+#include <random>
 
 #include <speechapi_cxx.h>
 
@@ -55,6 +56,7 @@ namespace HTN {
 		void feedAudio(void* output, u32 frameCount);
 	private:
 		Clock clock;
+		Clock eyeClock;
 		bool started = false;
 		std::string voiceName = "en-US-Ava:DragonHDLatestNeural";
 
@@ -63,6 +65,10 @@ namespace HTN {
 
 		std::string getSSML(const std::string& input);
 		void exponentialSmoothing(std::vector<f32>& newWeights, f32 alpha);
+		void applyBilabialDominance(u32 nowMs, size current);
+		void applyLipHeavyTiming(u32 nowMs, size current);
+		void applyEyeMovementWeights(u32 nowMs, f32 alpha);
+		void applyEyebrowMovementWeights(u32 nowMs, size current);
 
 		std::vector<visemeEntry> entries;
 		std::shared_ptr<Microsoft::CognitiveServices::Speech::SpeechSynthesizer> synth;
@@ -74,5 +80,23 @@ namespace HTN {
 
 		std::thread speakThread;
 		std::mutex mtx;
+
+		std::random_device rd;
+		std::mt19937 gen;
+		std::string eyeState = "FOCUS";
+		bool isBlinking = false;
+		f32 blinkTimer = 0.0f;
+		f32 nextBlinkMs = 1000.0f;
+		u32 nextTransitionTimeMs = 0;
+		u32 cascadeTransitionTime = 0;
+
+		std::vector<f32> targetEyeWeights = std::vector<f32>(MAX_WEIGHTS, 0.0f);
+		std::vector<f32> currentEyeWeights = std::vector<f32>(MAX_WEIGHTS, 0.0f);
+		std::vector<u32> eyeIndices;
+		u32 focusWaitTime();
+		u32 avertWaitTime();
+		void pickAvertEyeLocation(f32 scale);
+		void focusLocation();
+		void blinking(u32 frameMs);
 	};
 } // namespace HTN

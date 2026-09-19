@@ -9,6 +9,14 @@
 #include <algorithm>
 
 HTN::faceAnim::faceAnim() {
+	gen.seed(rd());
+
+	for (size p = 0; p < 5; p++)
+		for (size i = 0; i < eyeWeightChanges[p].size(); i++) {
+			u32 idx = eyeWeightChanges[p][i].weightIndex;
+			if (std::find(eyeIndices.begin(), eyeIndices.end(), idx) == eyeIndices.end())
+				eyeIndices.push_back(idx);
+		}
 }
 
 HTN::faceAnim::~faceAnim() {
@@ -26,7 +34,7 @@ void HTN::faceAnim::pushViseme(u32 ID, u32 offset) {
 std::vector<HTN::f32> HTN::faceAnim::sample() {
 	std::lock_guard<std::mutex> lock(mtx);
 
-	u32 frameMs = clock.elapsedMs();
+	u32 frameMs = eyeClock.elapsedMs();
 	u32 dt = frameMs - lastFrameMs;
 	lastFrameMs = frameMs;
 
@@ -34,6 +42,7 @@ std::vector<HTN::f32> HTN::faceAnim::sample() {
 
 	if (!started) {
 		exponentialSmoothing(std::vector<f32>(MAX_WEIGHTS, 0.0f), alpha);
+		applyEyeMovementWeights(frameMs, alpha);
 		return displayedWeights;
 	}
 
@@ -52,11 +61,17 @@ std::vector<HTN::f32> HTN::faceAnim::sample() {
 
 	if (!found) {
 		exponentialSmoothing(std::vector<f32>(MAX_WEIGHTS, 0.0f), alpha);
+		applyEyeMovementWeights(frameMs, alpha);
+		blinking(frameMs);
 		return displayedWeights;
 	}
 
 	if (current + 1 >= entries.size()) {
 		exponentialSmoothing(weightsForViseme(getViseme(current)), alpha);
+		applyBilabialDominance(sampleMs, current);
+		applyLipHeavyTiming(sampleMs, current);
+		applyEyeMovementWeights(frameMs, alpha);
+		blinking(frameMs);
 		return displayedWeights;
 	}
 
@@ -66,6 +81,11 @@ std::vector<HTN::f32> HTN::faceAnim::sample() {
 	u32 timeElapsed = sampleMs - getAudioOffset(current);
 
 	exponentialSmoothing(weightChange(srcWeights, dstWeights, transitionTime, timeElapsed), alpha);
+
+	applyBilabialDominance(sampleMs, current);
+	applyLipHeavyTiming(sampleMs, current);
+	applyEyeMovementWeights(frameMs, alpha);
+	blinking(frameMs);
 
 	return displayedWeights;
 }
@@ -186,4 +206,154 @@ void HTN::faceAnim::exponentialSmoothing(std::vector<f32>& newWeights, f32 alpha
 	for (size i = 0; i < MAX_WEIGHTS; i++) {
 		displayedWeights[i] += alpha * (newWeights[i] - displayedWeights[i]);
 	}
+}
+
+void HTN::faceAnim::applyBilabialDominance(u32 nowMs, size current) {
+	const f32 onsetMs = 80.0f;
+	const f32 decayMs = 120.0f;
+
+	u32 apex;
+	if (getViseme(current) == 21) {
+		apex = getAudioOffset(current);
+	} else if (current + 1 < entries.size() && getViseme(current + 1) == 21) {
+		apex = getAudioOffset(current + 1);
+	} else {
+		return;
+	}
+
+	i32 dtApex = (i32)nowMs - (i32)apex;
+	f32 d;
+
+	if (dtApex < 0) {
+		d = 1.0f + (f32)dtApex / onsetMs;
+	}
+	else {
+		d = 1.0f - (f32)dtApex / decayMs;
+	}
+
+	d = std::clamp(d, 0.0f, 0.65f);
+
+	std::vector<f32> closed = weightsForViseme(21);
+	for (size i = 0; i < MAX_WEIGHTS; i++)
+		displayedWeights[i] += d * (closed[i] - displayedWeights[i]);
+}
+
+void HTN::faceAnim::applyLipHeavyTiming(u32 nowMs, size current) {
+	const f32 onsetMs = 150.0f;
+	const f32 decayMs = 150.0f;
+
+	size lo = (current >= 3) ? current - 3 : 0;
+	size hi = min(current + 3, entries.size() - 1);
+	for (size i = lo; i <= hi; i++) {
+		u32 v = getViseme(i);
+		if (v != 7 && v != 8 && v != 10 && v != 16) continue;
+
+		i32 dtApex = (i32)nowMs - (i32)getAudioOffset(i);
+
+		f32 d = (dtApex > 0) ? 1 - (f32)dtApex / decayMs :
+							   1 + (f32)dtApex / onsetMs;
+
+		d = std::clamp(d, 0.0f, 1.0f);
+		if (d <= 0.0f) continue;
+
+		std::vector<f32> pose = weightsForViseme(getViseme(i));
+		for (size j = 0; j < MAX_WEIGHTS; j++) {
+			displayedWeights[j] += d * (pose[j] - displayedWeights[j]);
+		}
+	}
+}
+
+void HTN::faceAnim::applyEyeMovementWeights(u32 nowMs, f32 alpha) {
+	if (nowMs >= nextTransitionTimeMs) {
+		std::uniform_real_distribution<> distr(0, 1);
+		if (eyeState == "FOCUS") {
+			f32 chance = isBusy() ? 0.6f : 0.3f;
+			if (distr(gen) < chance) {
+				eyeState = "AVERT";
+				pickAvertEyeLocation(1.0f);
+				nextTransitionTimeMs = avertWaitTime() + nowMs;
+			}
+			else {
+				focusLocation();
+				nextTransitionTimeMs = focusWaitTime() + nowMs;
+			}
+		}
+		else {
+			eyeState = "FOCUS";
+			focusLocation();
+			nextTransitionTimeMs = focusWaitTime() + nowMs;
+		}
+	}
+	if (nowMs >= cascadeTransitionTime && eyeState == "FOCUS") {
+		focusLocation();
+		std::uniform_real_distribution<> distr(0, 2);
+		pickAvertEyeLocation(0.05f * distr(gen));
+		cascadeTransitionTime = nowMs + 300.0f * distr(gen);
+	}
+
+	for (u32 idx : eyeIndices) {
+		currentEyeWeights[idx] += alpha * (targetEyeWeights[idx] - currentEyeWeights[idx]);
+		displayedWeights[idx] = currentEyeWeights[idx];
+	}
+}
+
+HTN::u32 HTN::faceAnim::focusWaitTime() {
+	std::uniform_real_distribution<> distr(1.0f, 2.0f);
+	return distr(gen) * 1000;
+}
+
+HTN::u32 HTN::faceAnim::avertWaitTime() {
+	std::uniform_real_distribution<> distr(0.7f, 1.6f);
+	return distr(gen) * 1000;
+}
+
+void HTN::faceAnim::pickAvertEyeLocation(f32 scale) {
+	for (u32 idx : eyeIndices) targetEyeWeights[idx] = 0.0f;
+
+	std::uniform_real_distribution<> distr(0.0f, 1.0f);
+	std::uniform_real_distribution<> amount(0.6f, 1.0f);
+
+	float yAmt = amount(gen);
+	size yPose = distr(gen) > 0.5f ? 1 : 2;
+	for (size i = 0; i < eyeWeightChanges[yPose].size(); i++)
+		targetEyeWeights[eyeWeightChanges[yPose][i].weightIndex] = yAmt * eyeWeightChanges[yPose][i].valueWanted * scale;
+
+	float xAmt = amount(gen);
+	size xPose = distr(gen) > 0.5f ? 3 : 4;
+	for (size i = 0; i < eyeWeightChanges[xPose].size(); i++)
+		targetEyeWeights[eyeWeightChanges[xPose][i].weightIndex] = xAmt * eyeWeightChanges[xPose][i].valueWanted * scale;
+}
+
+void HTN::faceAnim::focusLocation() {
+	for (u32 idx : eyeIndices) targetEyeWeights[idx] = 0.0f;
+	for (size i = 0; i < eyeWeightChanges[0].size(); i++) {
+		targetEyeWeights[eyeWeightChanges[0][i].weightIndex] = eyeWeightChanges[0][i].valueWanted;
+	}
+}
+
+void HTN::faceAnim::blinking(u32 frameMs) {
+	if (!isBlinking && frameMs >= nextBlinkMs) {
+		isBlinking = true;
+		blinkTimer = frameMs;
+	}
+	if (!isBlinking) return;
+
+	const f32 onsetMs = 50.0f;
+	const f32 decayMs = 50.0f;
+
+	f32 elapsed = (f32)(frameMs - blinkTimer);
+	f32 d = (elapsed < 50.0f) ? elapsed / 50.0f : (100.0f - elapsed) / 50.0f;
+	d = std::clamp(d, 0.0f, 1.0f) * 0.75f;
+
+	for (size i = 0; i < blinkWeightChanges.size(); i++)
+		displayedWeights[blinkWeightChanges[i].weightIndex] = d * blinkWeightChanges[i].valueWanted;
+
+	if (elapsed >= 80.0f) {
+		isBlinking = false;
+		std::uniform_real_distribution<> gap(500.0f, 2000.0f);
+		nextBlinkMs = frameMs + (u32)gap(gen);
+	}
+}
+
+void HTN::faceAnim::applyEyebrowMovementWeights(u32 nowMs, size current) {
 }
