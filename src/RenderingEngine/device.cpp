@@ -189,9 +189,15 @@ void HTN::Device::pickPhysicalDevice() {
 	vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
 	for (const auto& dev : devices) {
-		if (isDeviceSuitable(dev)) {
+		if (!isDeviceSuitable(dev)) continue;
+		VkPhysicalDeviceProperties props;
+		vkGetPhysicalDeviceProperties(dev, &props);
+		if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
 			physicalDevice = dev;
 			break;
+		}
+		if (physicalDevice == VK_NULL_HANDLE) {
+			physicalDevice = dev;
 		}
 	}
 

@@ -1,6 +1,9 @@
 #include "texture.hpp"
 #include "stb_image.h"
 
+#include <cmath>
+#include <algorithm>
+
 HTN::Texture::Texture(Device& _device, const std::string& filepath) : device(_device) {
 	createTextureImage(filepath);
 	createTextureImageView();
@@ -36,19 +39,21 @@ void HTN::Texture::createTextureImage(const std::string& filepath) {
 
 	stbi_image_free(pixels);
 
-	Image::createImage(device, static_cast<u32>(texWidth), static_cast<u32>(texHeight), 1,
+	mipLevels = static_cast<u32>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
+
+	Image::createImage(device, static_cast<u32>(texWidth), static_cast<u32>(texHeight), mipLevels,
 					   VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
-					   VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+					   VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 					   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
 
 	Image::transitionImageLayout(device, textureImage, VK_FORMAT_R8G8B8A8_SRGB,
-								 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1);
+								 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
 
 	Image::copyBufferToImage(device, stagingBuffer, textureImage,
 							 static_cast<u32>(texWidth), static_cast<u32>(texHeight));
 
-	Image::transitionImageLayout(device, textureImage, VK_FORMAT_R8G8B8A8_SRGB,
-								 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
+	Image::generateMipmaps(device, textureImage, VK_FORMAT_R8G8B8A8_SRGB,
+						   static_cast<u32>(texWidth), static_cast<u32>(texHeight), mipLevels);
 
 	vkDestroyBuffer(device.getDevice(), stagingBuffer, nullptr);
 	vkFreeMemory(device.getDevice(), stagingBufferMemory, nullptr);
@@ -56,7 +61,7 @@ void HTN::Texture::createTextureImage(const std::string& filepath) {
 
 void HTN::Texture::createTextureImageView() {
 	Image::createImageView(device.getDevice(), textureImage, VK_FORMAT_R8G8B8A8_SRGB,
-						   VK_IMAGE_ASPECT_COLOR_BIT, textureImageView, 1);
+						   VK_IMAGE_ASPECT_COLOR_BIT, textureImageView, mipLevels);
 }
 
 void HTN::Texture::createTextureSampler() {
@@ -76,6 +81,7 @@ void HTN::Texture::createTextureSampler() {
 	samplerInfo.unnormalizedCoordinates = VK_FALSE;
 	samplerInfo.compareEnable = VK_FALSE;
 	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+	samplerInfo.maxLod = static_cast<float>(mipLevels);
 
 	if (vkCreateSampler(device.getDevice(), &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
 		throw std::runtime_error("ERROR: Failed to create texture sampler");

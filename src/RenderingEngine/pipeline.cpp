@@ -8,10 +8,11 @@ HTN::Pipeline::Pipeline(Device& _device, const std::string& _vertPath, const std
 }
 
 HTN::Pipeline::Pipeline(Device& _device, const std::string& _vertPath, const std::string& _fragPath,
-						 VkRenderPass sharedRenderPass, VkDescriptorSetLayout sharedLayout) :
+						 VkRenderPass sharedRenderPass, VkDescriptorSetLayout sharedLayout,
+						 VkCullModeFlags _cullMode) :
 	device(_device), vertPath(_vertPath), fragPath(_fragPath),
 	renderpass(sharedRenderPass), uboSetLayout(sharedLayout),
-	ownsRenderPass(false), ownsLayout(false) {
+	ownsRenderPass(false), ownsLayout(false), cullMode(_cullMode) {
 	createGraphicsPipeline();
 }
 
@@ -153,7 +154,7 @@ void HTN::Pipeline::createGraphicsPipeline() {
 	rasterizationCreateInfo.rasterizerDiscardEnable = VK_FALSE;
 	rasterizationCreateInfo.polygonMode = VK_POLYGON_MODE_FILL;
 	rasterizationCreateInfo.lineWidth = 1.0f;
-	rasterizationCreateInfo.cullMode = VK_CULL_MODE_NONE;
+	rasterizationCreateInfo.cullMode = cullMode;
 	rasterizationCreateInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 	rasterizationCreateInfo.depthBiasEnable = VK_FALSE;
 

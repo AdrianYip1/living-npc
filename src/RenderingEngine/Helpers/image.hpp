@@ -35,6 +35,9 @@ namespace HTN {
 									VkImageAspectFlags aspectFlags, VkImageView& imageView,
 									u32 mipLevels);
 
+		static void generateMipmaps(Device& device, VkImage image, VkFormat format,
+									u32 width, u32 height, u32 mipLevels);
+
 	private:
 
 	};

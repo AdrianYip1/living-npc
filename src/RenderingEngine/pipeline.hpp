@@ -14,7 +14,8 @@ namespace HTN {
 	public:
 		Pipeline(Device& _device, const std::string& vertPath, const std::string& fragPath);
 		Pipeline(Device& _device, const std::string& vertPath, const std::string& fragPath,
-				 VkRenderPass sharedRenderPass, VkDescriptorSetLayout sharedLayout);
+				 VkRenderPass sharedRenderPass, VkDescriptorSetLayout sharedLayout,
+				 VkCullModeFlags cullMode = VK_CULL_MODE_NONE);
 		~Pipeline();
 		Pipeline(const Pipeline&) = delete;
 		Pipeline& operator=(const Pipeline&) = delete;
@@ -36,6 +37,7 @@ namespace HTN {
 
 		bool ownsRenderPass = true;
 		bool ownsLayout = true;
+		VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
 
 		void createRenderPass();
 		void createGraphicsPipeline();

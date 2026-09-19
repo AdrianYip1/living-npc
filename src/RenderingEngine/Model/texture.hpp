@@ -26,6 +26,7 @@ namespace HTN {
 		VkDeviceMemory textureImageMemory = VK_NULL_HANDLE;
 		VkImageView textureImageView = VK_NULL_HANDLE;
 		VkSampler textureSampler = VK_NULL_HANDLE;
+		u32 mipLevels = 1;
 
 		void createTextureImage(const std::string& filepath);
 		void createTextureImageView();

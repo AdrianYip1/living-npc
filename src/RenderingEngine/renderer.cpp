@@ -15,7 +15,7 @@ HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	device(_window),
 	pipeline(device, "shaders/shader.vert.spv", "shaders/shader.frag.spv"),
 	scenePipeline(device, "shaders/shader.vert.spv", "shaders/shader.frag.spv",
-				  pipeline.getRenderpass(), pipeline.getUboSetLayout()),
+				  pipeline.getRenderpass(), pipeline.getUboSetLayout(), VK_CULL_MODE_BACK_BIT),
 	drawing(device, pipeline),
 	uniform(device) {
 
