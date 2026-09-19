@@ -17,13 +17,17 @@ namespace HTN {
 		Drawing& operator=(const Drawing&) = delete;
 
 		std::vector<VkFramebuffer>& getFramebuffers() { return swapchainFramebuffers; }
+		VkCommandBuffer getCommandBuffer(u32 frame) { return commandBuffers[frame]; }
+		void recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex);
 
 	private:
 		Device& device;
 		Pipeline& pipeline;
 
 		std::vector<VkFramebuffer> swapchainFramebuffers;
+		std::vector<VkCommandBuffer> commandBuffers;
 
 		void createFramebuffer();
+		void createCommandBuffer();
 	};
 } // namespace HTN

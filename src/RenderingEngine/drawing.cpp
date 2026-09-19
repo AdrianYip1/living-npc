@@ -3,6 +3,7 @@
 HTN::Drawing::Drawing(Device& _device, Pipeline& _pipeline) :
 	device(_device), pipeline(_pipeline) {
 	createFramebuffer();
+	createCommandBuffer();
 }
 
 HTN::Drawing::~Drawing() {
@@ -34,4 +35,10 @@ void HTN::Drawing::createFramebuffer() {
 			throw std::runtime_error("ERROR: Failed to create framebuffer");
 		}
 	}
+}
+
+void HTN::Drawing::createCommandBuffer() {
+}
+
+void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex) {
 }
