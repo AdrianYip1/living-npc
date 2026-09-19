@@ -174,9 +174,9 @@ void HTN::Pipeline::createGraphicsPipeline() {
 	colorBlendingCreateInfo.pAttachments = &colorBlendAttachment;
 
 	Descriptor::createDescriptorSetLayout(device,
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
-		{VK_SHADER_STAGE_VERTEX_BIT},
-		{0},
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+		{VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT},
+		{0, 1},
 		uboSetLayout);
 
 	VkPipelineLayoutCreateInfo layoutCreateInfo{};

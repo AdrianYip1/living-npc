@@ -33,6 +33,8 @@ namespace HTN {
 		VkDescriptorPool imguiPool;
 		std::vector<VkDescriptorSet> descriptorSets;
 
+		LightUBO light;
+
 		u32 currentFrame = 0;
 
 		std::vector<VkSemaphore> imageAvailableSemaphores;

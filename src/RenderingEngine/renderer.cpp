@@ -71,14 +71,18 @@ void HTN::Renderer::drawFrame() {
 	ubo.proj.m[1][1] *= -1.0f;
 
 	uniform.updateUniformBuffer(currentFrame, ubo);
+	uniform.updateLightBuffer(currentFrame, light);
 
 	ImGui_ImplVulkan_NewFrame();
 	ImGui_ImplGlfw_NewFrame();
 	ImGui::NewFrame();
 
-	ImGui::Begin("Living NPC");
-	ImGui::Text("Face Model Loaded");
-	ImGui::Text("Vertices: %d", model.getIndexCount());
+	const ImGuiViewport* vp = ImGui::GetMainViewport();
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x, vp->WorkPos.y), ImGuiCond_Always);
+	ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x * 0.35f, vp->WorkSize.y * 0.25f), ImGuiCond_Always);
+	ImGui::Begin("UI", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
+	ImGui::SliderFloat3("Direction", &light.direction.x, -1.0f, 1.0f);
+	ImGui::ColorEdit3("Color", &light.color.x);
 	ImGui::End();
 
 	ImGui::Render();
@@ -157,14 +161,14 @@ void HTN::Renderer::createSyncObjects() {
 
 void HTN::Renderer::createDescriptors() {
 	Descriptor::createDescriptorPool(device,
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
 		descriptorPool);
 
 	Descriptor::createDescriptorSets(device,
 		pipeline.getUboSetLayout(),
 		descriptorPool,
-		{uniform.getUniformBuffers()},
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
+		{uniform.getUniformBuffers(), uniform.getLightUniformBuffers()},
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER},
 		descriptorSets);
 }
 
