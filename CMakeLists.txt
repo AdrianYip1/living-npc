@@ -49,6 +49,7 @@ target_link_libraries(imgui PUBLIC glfw Vulkan::Vulkan)
 
 add_executable(living_npc
     src/main.cpp
+    src/RenderingEngine/Platform/window.cpp
     src/RenderingEngine/Helpers/buffer.cpp
     src/RenderingEngine/Helpers/image.cpp)
 
