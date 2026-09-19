@@ -52,7 +52,8 @@ add_executable(living_npc
     src/RenderingEngine/device.cpp
     src/RenderingEngine/Platform/window.cpp
     src/RenderingEngine/Helpers/buffer.cpp
-    src/RenderingEngine/Helpers/image.cpp)
+    src/RenderingEngine/Helpers/image.cpp
+    src/RenderingEngine/pipeline.cpp)
 
 add_dependencies(living_npc shaders)
 
