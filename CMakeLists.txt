@@ -68,10 +68,6 @@ add_executable(living_npc
     src/RenderingEngine/Model/uniform.cpp
     src/RenderingEngine/Model/texture.cpp)
 
-set(TEXTURE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/textures)
-add_custom_command(TARGET living_npc POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different ${TEXTURE_DIR} ${CMAKE_BINARY_DIR}/textures)
-
 add_dependencies(living_npc shaders)
 
 target_include_directories(living_npc PRIVATE src vendor)
