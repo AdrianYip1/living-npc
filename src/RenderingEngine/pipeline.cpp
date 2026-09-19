@@ -16,6 +16,14 @@ HTN::Pipeline::Pipeline(Device& _device, const std::string& _vertPath, const std
 	createGraphicsPipeline();
 }
 
+HTN::Pipeline::Pipeline(Device& _device, const std::string& _vertPath, const std::string& _fragPath,
+						 VkRenderPass sharedRenderPass) :
+	device(_device), vertPath(_vertPath), fragPath(_fragPath),
+	renderpass(sharedRenderPass),
+	ownsRenderPass(false), ownsLayout(true), isSkybox(true) {
+	createGraphicsPipeline();
+}
+
 HTN::Pipeline::~Pipeline() {
 	if (ownsLayout) vkDestroyDescriptorSetLayout(device.getDevice(), uboSetLayout, nullptr);
 	vkDestroyPipeline(device.getDevice(), graphicsPipeline, nullptr);
@@ -128,6 +136,13 @@ void HTN::Pipeline::createGraphicsPipeline() {
 	vertexInputCreateInfo.vertexAttributeDescriptionCount = static_cast<u32>(attributeDescriptions.size());
 	vertexInputCreateInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
+	if (isSkybox) {
+		vertexInputCreateInfo.vertexBindingDescriptionCount = 0;
+		vertexInputCreateInfo.pVertexBindingDescriptions = nullptr;
+		vertexInputCreateInfo.vertexAttributeDescriptionCount = 0;
+		vertexInputCreateInfo.pVertexAttributeDescriptions = nullptr;
+	}
+
 	VkPipelineInputAssemblyStateCreateInfo inputAssemblyCreateInfo{};
 	inputAssemblyCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
 	inputAssemblyCreateInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -162,7 +177,7 @@ void HTN::Pipeline::createGraphicsPipeline() {
 	depthStencilCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
 	depthStencilCreateInfo.depthTestEnable = VK_TRUE;
 	depthStencilCreateInfo.depthWriteEnable = VK_TRUE;
-	depthStencilCreateInfo.depthCompareOp = VK_COMPARE_OP_LESS;
+	depthStencilCreateInfo.depthCompareOp = isSkybox ? VK_COMPARE_OP_LESS_OR_EQUAL : VK_COMPARE_OP_LESS;
 	depthStencilCreateInfo.depthBoundsTestEnable = VK_FALSE;
 	depthStencilCreateInfo.stencilTestEnable = VK_FALSE;
 
@@ -183,30 +198,42 @@ void HTN::Pipeline::createGraphicsPipeline() {
 	colorBlendingCreateInfo.pAttachments = &colorBlendAttachment;
 
 	if (ownsLayout) {
-		Descriptor::createDescriptorSetLayout(device,
-			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-			{VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
-			 VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_VERTEX_BIT,
-			 VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
-			 VK_SHADER_STAGE_VERTEX_BIT},
-			{0, 1, 2, 3, 4, 5, 6},
-			uboSetLayout);
+		if (isSkybox) {
+			Descriptor::createDescriptorSetLayout(device,
+				{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+				{VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+				 VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_FRAGMENT_BIT},
+				{0, 1, 2, 3},
+				uboSetLayout);
+		} else {
+			Descriptor::createDescriptorSetLayout(device,
+				{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+				{VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+				 VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_VERTEX_BIT,
+				 VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT,
+				 VK_SHADER_STAGE_VERTEX_BIT},
+				{0, 1, 2, 3, 4, 5, 6},
+				uboSetLayout);
+		}
 	}
-
-	VkPushConstantRange pushConstant{};
-	pushConstant.offset = 0;
-	pushConstant.size = sizeof(MorphPush);
-	pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
 	VkPipelineLayoutCreateInfo layoutCreateInfo{};
 	layoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 	layoutCreateInfo.setLayoutCount = 1;
 	layoutCreateInfo.pSetLayouts = &uboSetLayout;
-	layoutCreateInfo.pushConstantRangeCount = 1;
-	layoutCreateInfo.pPushConstantRanges = &pushConstant;
+
+	VkPushConstantRange pushConstant{};
+	if (!isSkybox) {
+		pushConstant.offset = 0;
+		pushConstant.size = sizeof(MorphPush);
+		pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+		layoutCreateInfo.pushConstantRangeCount = 1;
+		layoutCreateInfo.pPushConstantRanges = &pushConstant;
+	}
 
 	if (vkCreatePipelineLayout(device.getDevice(), &layoutCreateInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
 		throw std::runtime_error("ERROR: Failed to create pipeline layout");

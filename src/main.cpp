@@ -5,6 +5,7 @@
 #include "RenderingEngine/Core/input.hpp"
 #include "RenderingEngine/Core/cameraControls.hpp"
 #include "RenderingEngine/renderer.hpp"
+#include "RenderingEngine/Utility/raycast.hpp"
 
 #include <iostream>
 
@@ -22,6 +23,13 @@ int main() {
 			controls.accumulateMovement();
 			controls.accumulateRotation();
 			controls.updatePos();
+
+			HTN::f32 floor = HTN::Raycast::getGround(camera.getPos(), renderer.getCollision(), renderer.getGroundGrid());
+			if (floor != -999.0f) {
+				enginemath::Vec3 pos = camera.getPos();
+				pos.y = floor + 3.3f;
+				camera.setPos(pos);
+			}
 
 			window.pollWindowEvents();
 			renderer.drawFrame();

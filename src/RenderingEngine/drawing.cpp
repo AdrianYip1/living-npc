@@ -56,7 +56,9 @@ void HTN::Drawing::createCommandBuffer() {
 void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex,
 										const std::map<std::string, std::vector<VkDescriptorSet>>& materialSets,
 										u32 currentFrame, Model& model,
-										Model* sceneModel, Pipeline* scenePipeline) {
+										Model* sceneModel, Pipeline* scenePipeline,
+										Pipeline* skyboxPipeline,
+										const std::vector<VkDescriptorSet>& skyboxSets) {
 	VkCommandBufferBeginInfo beginInfo{};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -103,6 +105,13 @@ void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapch
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.getGraphicsPipeline());
 	model.bind(commandBuffer);
 	model.draw(commandBuffer, pipeline.getPipelineLayout(), materialSets, currentFrame, 0);
+
+	if (skyboxPipeline && !skyboxSets.empty()) {
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, skyboxPipeline->getGraphicsPipeline());
+		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+			skyboxPipeline->getPipelineLayout(), 0, 1, &skyboxSets[currentFrame], 0, nullptr);
+		vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+	}
 
 	ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
 

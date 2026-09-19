@@ -7,3 +7,4 @@ out/
 src/secrets.hpp
 external/speechsdk/
 models/scene_opt/
+models/skybox/

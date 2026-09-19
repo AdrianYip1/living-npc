@@ -71,6 +71,7 @@ add_executable(living_npc
     src/RenderingEngine/Core/camera.cpp
     src/RenderingEngine/Core/input.cpp
     src/RenderingEngine/Core/cameraControls.cpp
+    src/RenderingEngine/Utility/raycast.cpp
     src/ProceduralAnimation/faceAnimator.cpp)
 
 add_custom_command(TARGET living_npc POST_BUILD

@@ -100,6 +100,17 @@ namespace HTN {
 		u32 instanceOffset = 0;
 	};
 
+	struct CollisionMesh {
+		std::vector<enginemath::Vec3> verts;
+		std::vector<u32> indices;
+
+		void append(const std::vector<enginemath::Vec3>& v, const std::vector<u32>& idx) {
+			u32 base = static_cast<u32>(verts.size());
+			for (const auto& p : v) verts.push_back(p);
+			for (u32 i : idx) indices.push_back(i + base);
+		}
+	};
+
 	struct fModel {
 		std::vector<Vertex> vertices;
 		std::vector<u32> indices;
@@ -107,6 +118,8 @@ namespace HTN {
 		std::vector<enginemath::Vec4> deltas;
 		std::vector<enginemath::Mat4> inverseBindMatrix;
 		std::vector<enginemath::Mat4> instanceTransforms;
+		std::vector<enginemath::Vec3> collisionVertices;
+		std::vector<u32> collisionIndices;
 	};
 
 	class Model {

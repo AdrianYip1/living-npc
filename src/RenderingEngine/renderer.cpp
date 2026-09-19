@@ -1,5 +1,7 @@
 #include "renderer.hpp"
 #include "Model/modelLoading.hpp"
+#include "Helpers/buffers.hpp"
+#include "stb_image.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -8,6 +10,8 @@
 
 #include <enginemath/mat4.hpp>
 #include <fstream>
+#include <chrono>
+#include <cstring>
 
 HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	window(_window),
@@ -16,6 +20,8 @@ HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	pipeline(device, "shaders/shader.vert.spv", "shaders/shader.frag.spv"),
 	scenePipeline(device, "shaders/shader.vert.spv", "shaders/shader.frag.spv",
 				  pipeline.getRenderpass(), pipeline.getUboSetLayout(), VK_CULL_MODE_BACK_BIT),
+	skyboxPipeline(device, "shaders/skybox.vert.spv", "shaders/skybox.frag.spv",
+				   pipeline.getRenderpass()),
 	drawing(device, pipeline),
 	uniform(device) {
 
@@ -26,6 +32,7 @@ HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	Model::createModel(device, std::move(fmodel), &model);
 	loadScene();
 	createTextures();
+	createCubemap();
 	createDescriptors();
 	initImGui();
 	createSyncObjects();
@@ -40,8 +47,16 @@ HTN::Renderer::~Renderer() {
 	ImGui::DestroyContext();
 
 	textures.clear();
+	for (u32 i = 0; i < SKYBOX_COUNT; i++) {
+		vkDestroySampler(device.getDevice(), cubemapSamplers[i], nullptr);
+		vkDestroyImageView(device.getDevice(), cubemapViews[i], nullptr);
+		vkDestroyImage(device.getDevice(), cubemapImages[i], nullptr);
+		vkFreeMemory(device.getDevice(), cubemapMemories[i], nullptr);
+	}
 	vkDestroyDescriptorPool(device.getDevice(), imguiPool, nullptr);
 	vkDestroyDescriptorPool(device.getDevice(), descriptorPool, nullptr);
+	if (skyboxPool != VK_NULL_HANDLE)
+		vkDestroyDescriptorPool(device.getDevice(), skyboxPool, nullptr);
 
 	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 		vkDestroySemaphore(device.getDevice(), imageAvailableSemaphores[i], nullptr);
@@ -72,13 +87,17 @@ void HTN::Renderer::drawFrame() {
 
 	camera.setAspect(static_cast<f32>(device.getExtent().width) / static_cast<f32>(device.getExtent().height));
 
+	static auto startTime = std::chrono::steady_clock::now();
+	f32 elapsed = std::chrono::duration<f32>(std::chrono::steady_clock::now() - startTime).count();
+
 	UBO ubo{};
 	ubo.view = camera.getView();
 	ubo.proj = camera.getProj();
+	ubo.time = elapsed;
 
 	faceWeights = animator->sample();
-	f32 elapsed = animClock.elapsedMs() / 1000.0f;
-	auto palette = skeleton.computePalette(elapsed, inverseBindMatrices);
+	f32 animElapsed = animClock.elapsedMs() / 1000.0f;
+	auto palette = skeleton.computePalette(animElapsed, inverseBindMatrices);
 
 	uniform.updateUniformBuffer(currentFrame, ubo);
 	uniform.updateLightBuffer(currentFrame, light);
@@ -111,7 +130,8 @@ void HTN::Renderer::drawFrame() {
 	drawing.recordCommandBuffer(drawing.getCommandBuffer(currentFrame), swapchainImageIndex,
 								materialSets, currentFrame, model,
 								hasScene ? &sceneModel : nullptr,
-								hasScene ? &scenePipeline : nullptr);
+								hasScene ? &scenePipeline : nullptr,
+								&skyboxPipeline, skyboxSets);
 
 	VkSubmitInfo submitInfo{};
 	submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -166,6 +186,8 @@ void HTN::Renderer::loadScene() {
 	fModel sceneFmodel;
 	Skeleton throwaway;
 	Loader::loadModel(scenePath, sceneFmodel, throwaway, true);
+	collisionMesh.append(sceneFmodel.collisionVertices, sceneFmodel.collisionIndices);
+	groundGrid.build(collisionMesh);
 	Model::createModel(device, std::move(sceneFmodel), &sceneModel);
 	hasScene = true;
 }
@@ -215,6 +237,136 @@ void HTN::Renderer::createTextures() {
 	}
 }
 
+void HTN::Renderer::createCubemap() {
+	cubemapImages.resize(SKYBOX_COUNT);
+	cubemapMemories.resize(SKYBOX_COUNT);
+	cubemapViews.resize(SKYBOX_COUNT);
+	cubemapSamplers.resize(SKYBOX_COUNT);
+
+	for (u32 s = 0; s < SKYBOX_COUNT; s++) {
+		int w, h, ch;
+		stbi_uc* pixels[6];
+		for (int j = 0; j < 6; j++) {
+			pixels[j] = stbi_load(cubemapTexturePaths[s][j], &w, &h, &ch, STBI_rgb_alpha);
+			if (!pixels[j]) throw std::runtime_error("Failed to load skybox face");
+		}
+
+		VkDeviceSize faceSize = w * h * 4;
+		VkDeviceSize cubeTotalSize = faceSize * 6;
+
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		Buffer::createBuffer(device, cubeTotalSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			stagingBuffer, stagingBufferMemory);
+
+		void* data;
+		vkMapMemory(device.getDevice(), stagingBufferMemory, 0, cubeTotalSize, 0, &data);
+		for (int j = 0; j < 6; j++) {
+			memcpy(static_cast<char*>(data) + j * faceSize, pixels[j], faceSize);
+			stbi_image_free(pixels[j]);
+		}
+		vkUnmapMemory(device.getDevice(), stagingBufferMemory);
+
+		VkImageCreateInfo ci{};
+		ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		ci.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+		ci.imageType = VK_IMAGE_TYPE_2D;
+		ci.format = VK_FORMAT_R8G8B8A8_SRGB;
+		ci.extent = {static_cast<u32>(w), static_cast<u32>(h), 1};
+		ci.mipLevels = 1;
+		ci.arrayLayers = 6;
+		ci.samples = VK_SAMPLE_COUNT_1_BIT;
+		ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		vkCreateImage(device.getDevice(), &ci, nullptr, &cubemapImages[s]);
+
+		VkMemoryRequirements memReq;
+		vkGetImageMemoryRequirements(device.getDevice(), cubemapImages[s], &memReq);
+
+		VkMemoryAllocateInfo allocInfo{};
+		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocInfo.allocationSize = memReq.size;
+		allocInfo.memoryTypeIndex = Buffer::findMemoryType(device, memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		vkAllocateMemory(device.getDevice(), &allocInfo, nullptr, &cubemapMemories[s]);
+		vkBindImageMemory(device.getDevice(), cubemapImages[s], cubemapMemories[s], 0);
+
+		VkCommandBuffer cmd = Buffer::beginSingleTimeCommands(device);
+
+		VkImageMemoryBarrier barrier{};
+		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = cubemapImages[s];
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.baseMipLevel = 0;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount = 6;
+		barrier.srcAccessMask = 0;
+		barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+		vkCmdPipelineBarrier(cmd,
+			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+			0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+		VkBufferImageCopy regions[6]{};
+		for (int j = 0; j < 6; j++) {
+			regions[j].bufferOffset = j * faceSize;
+			regions[j].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			regions[j].imageSubresource.mipLevel = 0;
+			regions[j].imageSubresource.baseArrayLayer = j;
+			regions[j].imageSubresource.layerCount = 1;
+			regions[j].imageExtent = {static_cast<u32>(w), static_cast<u32>(h), 1};
+		}
+		vkCmdCopyBufferToImage(cmd, stagingBuffer, cubemapImages[s],
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 6, regions);
+
+		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+		vkCmdPipelineBarrier(cmd,
+			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+			0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+		Buffer::endSingleTimeCommands(device, cmd);
+
+		vkDestroyBuffer(device.getDevice(), stagingBuffer, nullptr);
+		vkFreeMemory(device.getDevice(), stagingBufferMemory, nullptr);
+
+		VkImageViewCreateInfo viewCI{};
+		viewCI.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		viewCI.image = cubemapImages[s];
+		viewCI.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+		viewCI.format = VK_FORMAT_R8G8B8A8_SRGB;
+		viewCI.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		viewCI.subresourceRange.baseMipLevel = 0;
+		viewCI.subresourceRange.levelCount = 1;
+		viewCI.subresourceRange.baseArrayLayer = 0;
+		viewCI.subresourceRange.layerCount = 6;
+		vkCreateImageView(device.getDevice(), &viewCI, nullptr, &cubemapViews[s]);
+
+		VkSamplerCreateInfo samplerCI{};
+		samplerCI.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		samplerCI.magFilter = VK_FILTER_LINEAR;
+		samplerCI.minFilter = VK_FILTER_LINEAR;
+		samplerCI.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		samplerCI.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		samplerCI.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		samplerCI.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		samplerCI.maxLod = 0.0f;
+		samplerCI.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+		vkCreateSampler(device.getDevice(), &samplerCI, nullptr, &cubemapSamplers[s]);
+	}
+}
+
 void HTN::Renderer::createDescriptors() {
 	u32 materialCount = static_cast<u32>(textures.size());
 
@@ -246,6 +398,26 @@ void HTN::Renderer::createDescriptors() {
 			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
 			materialSets[uri]);
 	}
+
+	Descriptor::createDescriptorPool(device,
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+		 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+		skyboxPool);
+
+	VkDescriptorImageInfo cubemapInfo[SKYBOX_COUNT];
+	for (u32 i = 0; i < SKYBOX_COUNT; i++) {
+		cubemapInfo[i].sampler = cubemapSamplers[i];
+		cubemapInfo[i].imageView = cubemapViews[i];
+		cubemapInfo[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	}
+
+	Descriptor::createDescriptorSets(device, skyboxPipeline.getUboSetLayout(), skyboxPool,
+		{0, 1, 2, 3},
+		{uniform.getUniformBuffers(), {}, {}, {}},
+		{{}, cubemapInfo[0], cubemapInfo[1], cubemapInfo[2]},
+		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+		 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+		skyboxSets);
 }
 
 void HTN::Renderer::initImGui() {

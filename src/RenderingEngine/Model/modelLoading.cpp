@@ -86,6 +86,9 @@ bool HTN::Loader::loadModel(const std::string& modelPath, fModel& out, Skeleton&
 		for (cgltf_mesh* mesh : meshOrder) {
 			buildInstancedMesh(mesh, out, instances[mesh]);
 		}
+		for (cgltf_size i = 0; i < data->scene->nodes_count; i++) {
+			collectCollision(data->scene->nodes[i], out);
+		}
 		cgltf_free(data);
 	} else {
 		u32 weightBase = 0;
@@ -425,4 +428,42 @@ std::vector<enginemath::Mat4> HTN::Skeleton::computePalette(f32 elapsedSeconds, 
 		palette[j] = jointWorld * inverseBind[j];
 	}
 	return palette;
+}
+
+void HTN::Loader::collectCollision(cgltf_node* node, fModel& out) {
+	if (node->mesh && node->mesh->name && std::string(node->mesh->name) == "Plane") {
+		f32 w[16];
+		cgltf_node_transform_world(node, w);
+		enginemath::Mat4 world(
+			enginemath::Vec4(w[0], w[1], w[2], w[3]),
+			enginemath::Vec4(w[4], w[5], w[6], w[7]),
+			enginemath::Vec4(w[8], w[9], w[10], w[11]),
+			enginemath::Vec4(w[12], w[13], w[14], w[15])
+		);
+		for (cgltf_size i = 0; i < node->mesh->primitives_count; i++) {
+			cgltf_primitive* prim = &node->mesh->primitives[i];
+			cgltf_accessor* posAccessor = nullptr;
+			for (cgltf_size a = 0; a < prim->attributes_count; a++) {
+				if (prim->attributes[a].type == cgltf_attribute_type_position)
+					posAccessor = prim->attributes[a].data;
+			}
+			if (!posAccessor) continue;
+			u32 vertBase = static_cast<u32>(out.collisionVertices.size());
+			for (cgltf_size p = 0; p < posAccessor->count; p++) {
+				f32 pos[3];
+				cgltf_accessor_read_float(posAccessor, p, pos, 3);
+				enginemath::Vec4 wp = world * enginemath::Vec4::toVec4Pos({pos[0], pos[1], pos[2]});
+				out.collisionVertices.push_back({wp.x, wp.y, wp.z});
+			}
+			if (prim->indices) {
+				for (cgltf_size k = 0; k < prim->indices->count; k++)
+					out.collisionIndices.push_back(vertBase + static_cast<u32>(cgltf_accessor_read_index(prim->indices, k)));
+			} else {
+				for (u32 k = 0; k < static_cast<u32>(posAccessor->count); k++)
+					out.collisionIndices.push_back(vertBase + k);
+			}
+		}
+	}
+	for (cgltf_size i = 0; i < node->children_count; i++)
+		collectCollision(node->children[i], out);
 }

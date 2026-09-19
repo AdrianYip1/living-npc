@@ -14,6 +14,7 @@ namespace HTN {
 		enginemath::Mat4 model = enginemath::Mat4::identity();
 		enginemath::Mat4 view = enginemath::Mat4::identity();
 		enginemath::Mat4 proj = enginemath::Mat4::identity();
+		f32 time = 0.0f;
 	};
 
 	struct LightUBO {

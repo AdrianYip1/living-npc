@@ -16,6 +16,8 @@ namespace HTN {
 		Pipeline(Device& _device, const std::string& vertPath, const std::string& fragPath,
 				 VkRenderPass sharedRenderPass, VkDescriptorSetLayout sharedLayout,
 				 VkCullModeFlags cullMode = VK_CULL_MODE_NONE);
+		Pipeline(Device& _device, const std::string& vertPath, const std::string& fragPath,
+				 VkRenderPass sharedRenderPass);
 		~Pipeline();
 		Pipeline(const Pipeline&) = delete;
 		Pipeline& operator=(const Pipeline&) = delete;
@@ -37,6 +39,7 @@ namespace HTN {
 
 		bool ownsRenderPass = true;
 		bool ownsLayout = true;
+		bool isSkybox = false;
 		VkCullModeFlags cullMode = VK_CULL_MODE_NONE;
 
 		void createRenderPass();

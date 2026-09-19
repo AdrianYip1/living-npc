@@ -44,5 +44,6 @@ namespace HTN {
 			std::unordered_map<cgltf_mesh*, std::vector<enginemath::Mat4>>& instances);
 		static void buildInstancedMesh(cgltf_mesh* mesh, fModel& out,
 			const std::vector<enginemath::Mat4>& transforms);
+		static void collectCollision(cgltf_node* node, fModel& out);
 	};
 } // namespace HTN
