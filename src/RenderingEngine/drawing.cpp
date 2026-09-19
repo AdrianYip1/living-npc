@@ -38,7 +38,63 @@ void HTN::Drawing::createFramebuffer() {
 }
 
 void HTN::Drawing::createCommandBuffer() {
+	commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+
+	VkCommandBufferAllocateInfo allocInfo{};
+	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	allocInfo.commandPool = device.getCommandPool();
+	allocInfo.commandBufferCount = static_cast<u32>(commandBuffers.size());
+	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+
+	if (vkAllocateCommandBuffers(device.getDevice(), &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
+		throw std::runtime_error("ERROR: Failed to allocate command buffer");
+	}
 }
 
 void HTN::Drawing::recordCommandBuffer(VkCommandBuffer commandBuffer, u32 swapchainImageIndex) {
+	VkCommandBufferBeginInfo beginInfo{};
+	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+
+	if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+		throw std::runtime_error("ERROR: Failed to begin recording command buffer");
+	}
+
+	VkRenderPassBeginInfo renderpassBeginInfo{};
+	renderpassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+	renderpassBeginInfo.renderPass = pipeline.getRenderpass();
+	renderpassBeginInfo.framebuffer = swapchainFramebuffers[swapchainImageIndex];
+	renderpassBeginInfo.renderArea.extent = device.getExtent();
+	renderpassBeginInfo.renderArea.offset = { 0, 0 };
+
+	std::array<VkClearValue, 2> clearValues{};
+	clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+	clearValues[1].depthStencil = { 1.0f, 0 };
+
+	renderpassBeginInfo.clearValueCount = static_cast<u32>(clearValues.size());
+	renderpassBeginInfo.pClearValues = clearValues.data();
+
+	vkCmdBeginRenderPass(commandBuffer, &renderpassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+	VkViewport viewport{};
+	viewport.x = 0.0f;
+	viewport.y = 0.0f;
+	viewport.width = static_cast<f32>(device.getExtent().width);
+	viewport.height = static_cast<f32>(device.getExtent().height);
+	viewport.minDepth = 0.0f;
+	viewport.maxDepth = 1.0f;
+	vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+
+	VkRect2D scissor{};
+	scissor.offset = { 0, 0 };
+	scissor.extent = device.getExtent();
+	vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.getGraphicsPipeline());
+	vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
+	vkCmdEndRenderPass(commandBuffer);
+
+	if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+		throw std::runtime_error("ERROR: Failed to record command buffer");
+	}
 }
