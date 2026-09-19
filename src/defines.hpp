@@ -32,5 +32,6 @@ namespace HTN {
 
 	const u32 MAX_FRAMES_IN_FLIGHT = 2;
 	const u32 MAX_WEIGHTS = 128;
+	const u32 MAX_JOINTS = 128;
 
 } // namespace HTN

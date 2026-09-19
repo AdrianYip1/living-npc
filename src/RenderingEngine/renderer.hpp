@@ -2,12 +2,14 @@
 #include <vulkan/vulkan.h>
 
 #include "../defines.hpp"
+#include "../clock.hpp"
 #include "device.hpp"
 #include "pipeline.hpp"
 #include "drawing.hpp"
 #include "descriptor.hpp"
 #include "Model/model.hpp"
 #include "Model/uniform.hpp"
+#include "Model/modelLoading.hpp"
 #include "Platform/window.hpp"
 #include "Core/camera.hpp"
 #include "../ProceduralAnimation/faceAnimator.hpp"
@@ -33,6 +35,7 @@ namespace HTN {
 		Drawing drawing;
 		Uniform uniform;
 		Model model;
+		Skeleton skeleton;
 
 		std::unique_ptr<faceAnim> animator;
 
@@ -42,6 +45,8 @@ namespace HTN {
 
 		LightUBO light;
 		std::vector<f32> faceWeights = std::vector<f32>(MAX_WEIGHTS, 0.0f);
+		std::vector<enginemath::Mat4> inverseBindMatrices;
+		Clock animClock;
 
 		u32 currentFrame = 0;
 

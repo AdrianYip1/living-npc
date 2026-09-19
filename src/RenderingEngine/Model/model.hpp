@@ -19,6 +19,8 @@ namespace HTN {
 		enginemath::Vec3 color;
 		enginemath::Vec3 normal;
 		enginemath::Vec2 texCoord;
+		u32 joints[4] = {0, 0, 0, 0};
+		enginemath::Vec4 weights = enginemath::Vec4(0.0f);
 
 		static VkVertexInputBindingDescription getBindingDescription() {
 			VkVertexInputBindingDescription bindingDescription{};
@@ -28,8 +30,8 @@ namespace HTN {
 			return bindingDescription;
 		}
 
-		static std::array<VkVertexInputAttributeDescription, 4> getAttributeDescriptions() {
-			std::array<VkVertexInputAttributeDescription, 4> attr{};
+		static std::array<VkVertexInputAttributeDescription, 6> getAttributeDescriptions() {
+			std::array<VkVertexInputAttributeDescription, 6> attr{};
 
 			attr[0].binding = 0;
 			attr[0].location = 0;
@@ -51,6 +53,16 @@ namespace HTN {
 			attr[3].format = VK_FORMAT_R32G32_SFLOAT;
 			attr[3].offset = offsetof(Vertex, texCoord);
 
+			attr[4].binding = 0;
+			attr[4].location = 4;
+			attr[4].format = VK_FORMAT_R32G32B32A32_UINT;
+			attr[4].offset = offsetof(Vertex, joints);
+
+			attr[5].binding = 0;
+			attr[5].location = 5;
+			attr[5].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+			attr[5].offset = offsetof(Vertex, weights);
+
 			return attr;
 		}
 	};
@@ -63,6 +75,7 @@ namespace HTN {
 		u32 vertexOffset = 0;
 		u32 vertexCount = 0;
 		u32 weightsStartIndex = 0;
+		u32 isSkinned = 0;
 	};
 
 	struct MorphPush {
@@ -73,6 +86,8 @@ namespace HTN {
 		u32 vertexCount = 0;
 		u32 weightsStartIndex = 0;
 		u32 weightBase = 0;
+		u32 isSkinned = 0;
+		u32 jointBase = 0;
 	};
 
 	struct fModel {
@@ -80,6 +95,7 @@ namespace HTN {
 		std::vector<u32> indices;
 		std::vector<submesh> primitives;
 		std::vector<enginemath::Vec4> deltas;
+		std::vector<enginemath::Mat4> inverseBindMatrix;
 	};
 
 	class Model {
@@ -92,7 +108,8 @@ namespace HTN {
 		static bool createModel(Device& device, fModel model, Model* fmodel);
 
 		void bind(VkCommandBuffer commandBuffer);
-		void draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, VkDescriptorSet descriptorSet, u32 weightBase);
+		void draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
+				  VkDescriptorSet descriptorSet, u32 weightBase, u32 jointBase = 0);
 
 		VkBuffer getDeltasBuffer() { return deltasBuffer; }
 

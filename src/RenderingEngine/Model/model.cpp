@@ -32,7 +32,8 @@ void HTN::Model::bind(VkCommandBuffer commandBuffer) {
 	vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 }
 
-void HTN::Model::draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, VkDescriptorSet descriptorSet, u32 weightBase) {
+void HTN::Model::draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
+	VkDescriptorSet descriptorSet, u32 weightBase, u32 jointBase) {
 	vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
 		0, 1, &descriptorSet, 0, nullptr);
 
@@ -45,6 +46,8 @@ void HTN::Model::draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLa
 		push.vertexCount = s.vertexCount;
 		push.weightsStartIndex = s.weightsStartIndex;
 		push.weightBase = weightBase;
+		push.isSkinned = s.isSkinned;
+		push.jointBase = jointBase;
 		vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
 		vkCmdDrawIndexed(commandBuffer, s.indexCount, 1, s.indexStart, 0, 0);
 	}

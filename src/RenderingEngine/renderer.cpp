@@ -17,8 +17,9 @@ HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	uniform(device) {
 
 	fModel fmodel;
-	Loader::loadModel("models/face1.gltf", fmodel);
+	Loader::loadModel("models/combined.gltf", fmodel, skeleton);
 
+	inverseBindMatrices = fmodel.inverseBindMatrix;
 	Model::createModel(device, std::move(fmodel), &model);
 	createDescriptors();
 	initImGui();
@@ -70,9 +71,13 @@ void HTN::Renderer::drawFrame() {
 	ubo.proj = camera.getProj();
 
 	faceWeights = animator->sample();
+	f32 elapsed = animClock.elapsedMs() / 1000.0f;
+	auto palette = skeleton.computePalette(elapsed, inverseBindMatrices);
+
 	uniform.updateUniformBuffer(currentFrame, ubo);
 	uniform.updateLightBuffer(currentFrame, light);
 	uniform.updateWeightBuffer(currentFrame, faceWeights);
+	uniform.updateJointBuffer(currentFrame, palette);
 
 	ImGui_ImplVulkan_NewFrame();
 	ImGui_ImplGlfw_NewFrame();
@@ -172,7 +177,8 @@ void HTN::Renderer::createSyncObjects() {
 void HTN::Renderer::createDescriptors() {
 	Descriptor::createDescriptorPool(device,
 		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
 		descriptorPool);
 
 	VkBuffer deltasBuffer = model.getDeltasBuffer();
@@ -180,9 +186,11 @@ void HTN::Renderer::createDescriptors() {
 		pipeline.getUboSetLayout(),
 		descriptorPool,
 		{uniform.getUniformBuffers(), uniform.getLightUniformBuffers(),
-		 {deltasBuffer, deltasBuffer}, uniform.getWeightBuffers()},
+		 {deltasBuffer, deltasBuffer}, uniform.getWeightBuffers(),
+		 uniform.getJointBuffers()},
 		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
 		descriptorSets);
 }
 
