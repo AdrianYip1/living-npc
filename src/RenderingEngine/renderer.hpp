@@ -10,6 +10,9 @@
 #include "Model/uniform.hpp"
 #include "Platform/window.hpp"
 #include "Core/camera.hpp"
+#include "../ProceduralAnimation/faceAnimator.hpp"
+
+#include <memory>
 
 namespace HTN {
 	class Renderer {
@@ -30,6 +33,8 @@ namespace HTN {
 		Drawing drawing;
 		Uniform uniform;
 		Model model;
+
+		std::unique_ptr<faceAnim> animator;
 
 		VkDescriptorPool descriptorPool;
 		VkDescriptorPool imguiPool;

@@ -70,7 +70,8 @@ add_executable(living_npc
     src/RenderingEngine/Model/modelLoading.cpp
     src/RenderingEngine/Core/camera.cpp
     src/RenderingEngine/Core/input.cpp
-    src/RenderingEngine/Core/cameraControls.cpp)
+    src/RenderingEngine/Core/cameraControls.cpp
+    src/ProceduralAnimation/faceAnimator.cpp)
 
 add_custom_command(TARGET living_npc POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -82,3 +83,17 @@ target_include_directories(living_npc PRIVATE src vendor)
 
 target_link_libraries(living_npc PRIVATE
     enginemath::enginemath Vulkan::Vulkan glfw imgui)
+
+# Azure Speech SDK (TTS + blendshape visemes)
+set(SPEECHSDK ${CMAKE_CURRENT_SOURCE_DIR}/external/speechsdk)
+target_include_directories(living_npc PRIVATE
+    ${SPEECHSDK}/build/native/include/cxx_api
+    ${SPEECHSDK}/build/native/include/c_api)
+target_link_libraries(living_npc
+    PRIVATE ${SPEECHSDK}/build/native/x64/Release/Microsoft.CognitiveServices.Speech.core.lib)
+file(GLOB SPEECH_DLLS ${SPEECHSDK}/runtimes/win-x64/native/*.dll)
+if(SPEECH_DLLS)
+    add_custom_command(TARGET living_npc POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SPEECH_DLLS} $<TARGET_FILE_DIR:living_npc>
+        COMMENT "copying Speech SDK dlls next to exe")
+endif()

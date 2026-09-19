@@ -4,3 +4,5 @@ out/
 *.o
 *.obj
 *.exe
+src/secrets.hpp
+external/speechsdk/

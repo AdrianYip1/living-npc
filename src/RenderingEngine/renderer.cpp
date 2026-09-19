@@ -23,6 +23,9 @@ HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	createDescriptors();
 	initImGui();
 	createSyncObjects();
+
+	animator = std::make_unique<faceAnim>();
+	animator->setupSpeech();
 }
 
 HTN::Renderer::~Renderer() {
@@ -66,6 +69,7 @@ void HTN::Renderer::drawFrame() {
 	ubo.view = camera.getView();
 	ubo.proj = camera.getProj();
 
+	faceWeights = animator->sample();
 	uniform.updateUniformBuffer(currentFrame, ubo);
 	uniform.updateLightBuffer(currentFrame, light);
 	uniform.updateWeightBuffer(currentFrame, faceWeights);
@@ -81,28 +85,13 @@ void HTN::Renderer::drawFrame() {
 	ImGui::SliderFloat3("Direction", &light.direction.x, -1.0f, 1.0f);
 	ImGui::ColorEdit3("Color", &light.color.x);
 
-	static const char* weightNames[] = {
-		"eyeLookDownLeft", "eyeLookInLeft", "eyeLookOutLeft", "eyeLookUpLeft",
-		"eyeLookDownRight", "eyeLookInRight", "eyeLookOutRight", "eyeLookUpRight",
-		"eyeBlinkLeft", "eyeLookDownLeft", "eyeLookInLeft", "eyeLookOutLeft", "eyeLookUpLeft",
-		"eyeSquintLeft", "eyeWideLeft", "eyeBlinkRight", "eyeLookDownRight", "eyeLookInRight",
-		"eyeLookOutRight", "eyeLookUpRight", "eyeSquintRight", "eyeWideRight", "jawForward",
-		"jawLeft", "jawRight", "jawOpen", "mouthClose", "mouthFunnel", "mouthPucker",
-		"mouthRight", "mouthLeft", "mouthSmileLeft", "mouthSmileRight", "mouthFrownLeft",
-		"mouthFrownRight", "mouthDimpleLeft", "mouthDimpleRight", "mouthStretchLeft",
-		"mouthStretchRight", "mouthRollLower", "mouthRollUpper", "mouthShrugLower",
-		"mouthShrugUpper", "mouthPressLeft", "mouthPressRight", "mouthLowerDownLeft",
-		"mouthLowerDownRight", "mouthUpperUpLeft", "mouthUpperUpRight", "browDownLeft",
-		"browDownRight", "browInnerUp", "browOuterUpLeft", "browOuterUpRight", "cheekPuff",
-		"cheekSquintLeft", "cheekSquintRight", "noseSneerLeft", "noseSneerRight",
-		"jawForward (teeth)", "jawLeft (teeth)", "jawRight (teeth)", "jawOpen (teeth)", "mouthClose (teeth)"
-	};
-	if (ImGui::CollapsingHeader("Morph Weights")) {
-		for (int i = 0; i < (int)(sizeof(weightNames) / sizeof(weightNames[0])); i++) {
-			std::string label = "[" + std::to_string(i) + "] " + weightNames[i];
-			ImGui::SliderFloat(label.c_str(), &faceWeights[i], 0.0f, 1.0f);
-		}
+	static char ttsText[512] = "Hello, I am a living NPC. Nice to meet you!";
+	ImGui::InputText("Text", ttsText, sizeof(ttsText));
+	if (ImGui::Button("Speak") && !animator->isBusy()) {
+		animator->startSpeaking(std::string(ttsText));
 	}
+	ImGui::SameLine();
+	if (animator->isBusy()) ImGui::Text("Speaking...");
 
 	ImGui::End();
 
