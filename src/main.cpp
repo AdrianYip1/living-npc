@@ -14,6 +14,7 @@
 #include "json.hpp"
 
 #include <GLFW/glfw3.h>
+#include <imgui.h>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -145,7 +146,7 @@ int main() {
 				camera.setPos(pos);
 			}
 
-			bool talkKeyDown = input.keyPressed(GLFW_KEY_T);
+			bool talkKeyDown = !ImGui::GetIO().WantCaptureKeyboard && input.keyPressed(GLFW_KEY_T);
 			if (talkKeyDown && !talkKeyWasDown) {
 				int nearest = findNearestNPC(camera.getPos(), npcWorldPositions);
 				if (nearest >= 0 && !npcNames[nearest].empty()) {
