@@ -8,10 +8,18 @@ install -e .` from the repo root -- see pyproject.toml) from anywhere. It
 needs to be run as a package, not `python game.py` directly, since it
 imports sibling packages (game_agents, environment_agent) that only
 resolve once src/ is on sys.path, whether via cwd or the editable install.
+
+Two tunables, both real-time seconds, independently overridable with
+--tick-interval / --npc-query-interval (see Simulation for what each one
+actually paces):
+
+    python -m mini_map.game --tick-interval 5 --npc-query-interval 30
 """
 from __future__ import annotations
 
+import argparse
 import json
+import socket
 import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -26,7 +34,12 @@ from .simulation import Simulation
 STATIC_DIR = Path(__file__).parent / "static"
 HOST = "127.0.0.1"
 PORT = 8765
-TICK_INTERVAL_S = 15.0
+# 1s ticks x 1 game-minute/tick (EnvironmentAgent's own default) = 1 game-
+# minute per real second, i.e. a full in-game day in 24 real minutes --
+# matches the pace from before the clock became smooth (which was 15
+# game-minutes every 15s: the same 1-minute-per-second rate, just chunkier).
+TICK_INTERVAL_S = 1.0
+NPC_QUERY_INTERVAL_S = 15.0
 
 # Set by run() before the server starts; the handler reads it per-request.
 # A single-process script gets to have one simulation as shared state
@@ -49,6 +62,8 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/conversation/start": self._handle_conversation_start,
             "/api/conversation/end": self._handle_conversation_end,
             "/api/conversation/say": self._handle_conversation_say,
+            "/api/pause": self._handle_pause,
+            "/api/resume": self._handle_resume,
         }
         handler = routes.get(self.path)
         if handler is None:
@@ -71,6 +86,14 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self._send_json(200, result)
 
+    def _handle_pause(self, body: dict) -> None:
+        _simulation.pause()
+        self._send_json(200, {"paused": True})
+
+    def _handle_resume(self, body: dict) -> None:
+        _simulation.resume()
+        self._send_json(200, {"paused": False})
+
     def _read_json_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0))
         return json.loads(self.rfile.read(length)) if length else {}
@@ -87,19 +110,53 @@ class Handler(SimpleHTTPRequestHandler):
         pass
 
 
-def run(host: str = HOST, port: int = PORT, *, open_browser: bool = True) -> None:
+def _is_port_still_occupied(host: str, port: int, *, timeout: float = 0.5) -> bool:
+    """True if something accepts a connection at host:port. Only meaningful
+    right after this process's own listening socket has been closed --
+    Windows' SO_REUSEADDR (which ThreadingHTTPServer sets by default) lets
+    a second process bind the same port without erroring, so a successful
+    bind proves nothing; a successful *connect* does, since only an actual
+    listener answers one.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def run(
+    host: str = HOST,
+    port: int = PORT,
+    *,
+    open_browser: bool = True,
+    tick_interval_s: float = TICK_INTERVAL_S,
+    npc_query_interval_s: float = NPC_QUERY_INTERVAL_S,
+) -> None:
     global _simulation
 
     registry, backend = build_registry()
     environment = EnvironmentAgent()
-    _simulation = Simulation(registry, environment, tick_interval_s=TICK_INTERVAL_S)
+    _simulation = Simulation(
+        registry,
+        environment,
+        tick_interval_s=tick_interval_s,
+        npc_query_interval_s=npc_query_interval_s,
+    )
+    # The UI's status panel starts on "Paused" -- match that on the server
+    # so the world genuinely doesn't move until the player presses play,
+    # rather than ticking silently behind an already-stale-looking label.
+    _simulation.pause()
 
     sim_thread = threading.Thread(target=_simulation.run_forever, daemon=True)
     sim_thread.start()
 
     server = ThreadingHTTPServer((host, port), Handler)
     url = f"http://{host}:{port}"
-    print(f"mini-map UI running at {url} ({backend} backend, tick every {TICK_INTERVAL_S:.0f}s). Ctrl+C to stop")
+    print(
+        f"mini-map UI running at {url} ({backend} backend, in-game tick every {tick_interval_s:.0f}s, "
+        f"NPCs queried every {npc_query_interval_s:.0f}s). Ctrl+C to stop"
+    )
     if open_browser:
         webbrowser.open(url)
     try:
@@ -110,7 +167,40 @@ def run(host: str = HOST, port: int = PORT, *, open_browser: bool = True) -> Non
         _simulation.stop()
         server.server_close()
         registry.save_all()
+        # This process just released host:port -- if something still
+        # answers there, it's a leftover instance from an earlier run
+        # (e.g. one that outlived a closed terminal) rather than us.
+        if _is_port_still_occupied(host, port):
+            print(
+                f"\nWarning: {host}:{port} is still answering after shutdown -- "
+                "a previous ghost instance of this program is likely still running.\n"
+                f"Find it with: netstat -ano | findstr {port}\n"
+                "then stop it with: taskkill /F /PID <pid>"
+            )
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Launch the living-npc mini-map.")
+    parser.add_argument(
+        "--tick-interval",
+        type=float,
+        default=TICK_INTERVAL_S,
+        metavar="SECONDS",
+        help=f"Real seconds per in-game tick (day-phase/weather advance). Default: {TICK_INTERVAL_S:g}",
+    )
+    parser.add_argument(
+        "--npc-query-interval",
+        type=float,
+        default=NPC_QUERY_INTERVAL_S,
+        metavar="SECONDS",
+        help=(
+            "Real seconds between rounds of querying every idle NPC's LLM. "
+            f"Default: {NPC_QUERY_INTERVAL_S:g}"
+        ),
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    run()
+    args = _parse_args()
+    run(tick_interval_s=args.tick_interval, npc_query_interval_s=args.npc_query_interval)

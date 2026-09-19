@@ -16,13 +16,23 @@ from game_agents.registry import NPCRegistry
 
 
 class Simulation:
-    """Every tick_interval_s seconds: the environment agent decides the new
-    time of day (and weather, and whether a traveler arrives -- see its own
-    docstring, it's meant to be the thing that re-triggers NPC idle
-    behavior, not the other way around), then every NPC who isn't currently
-    busy gets exactly one Agent.respond() call stimulated by that time of
-    day. Matches the rest of the codebase's one-shot, no-lookahead turn
-    shape -- this just triggers it autonomously instead of from a player.
+    """Two independently-paced real-time cadences, decoupled on purpose:
+
+    - tick_interval_s: how fast the in-game clock itself runs -- how often
+      the environment agent advances weather/time-of-day/travelers (see its
+      own docstring; still deterministic, no LLM call of its own yet).
+    - npc_query_interval_s: how often idle NPCs actually get stimulated,
+      i.e. how often their LLM gets queried. This is the expensive/slow
+      part, so it's allowed to lag behind a fast-ticking clock instead of
+      firing every single tick.
+
+    run_forever() runs each on its own daemon thread rather than
+    interleaving them on one -- a real LLM backend can take several real
+    seconds per NPC, and if that ran on the same thread/loop as the
+    environment tick, a slow query round would stall the "fast" clock too,
+    defeating the point of decoupling the two rates in the first place.
+    tick() is the synchronous, do-both-right-now version -- what tests and
+    any other direct caller use for a deterministic beat.
     """
 
     def __init__(
@@ -31,30 +41,75 @@ class Simulation:
         environment: EnvironmentAgent,
         *,
         tick_interval_s: float = 15.0,
+        npc_query_interval_s: float = 15.0,
     ) -> None:
         self._registry = registry
         self._environment = environment
         self._tick_interval_s = tick_interval_s
+        self._npc_query_interval_s = npc_query_interval_s
         self._stop = threading.Event()
+        # Set while paused -- checked by both loops below, not the player-
+        # conversation methods (start_conversation/end_conversation/say):
+        # pausing freezes the autonomous world, not the player's own direct
+        # interaction with it.
+        self._paused = threading.Event()
         # Read by the HTTP handler thread, written by the tick thread below;
         # plain dict/tuple assignment is fine to read concurrently under the
         # GIL for a display that's allowed to be a beat stale.
         self._last_activity: dict[str, str] = {}
 
     def run_forever(self) -> None:
-        while not self._stop.is_set():
-            self.tick()
-            self._stop.wait(self._tick_interval_s)
+        env_thread = threading.Thread(target=self._run_environment_loop, daemon=True)
+        npc_thread = threading.Thread(target=self._run_npc_query_loop, daemon=True)
+        env_thread.start()
+        npc_thread.start()
+        env_thread.join()
+        npc_thread.join()
 
     def stop(self) -> None:
         self._stop.set()
 
+    def pause(self) -> None:
+        self._paused.set()
+
+    def resume(self) -> None:
+        self._paused.clear()
+
+    def is_paused(self) -> bool:
+        return self._paused.is_set()
+
+    def _run_environment_loop(self) -> None:
+        while not self._stop.is_set():
+            if not self._paused.is_set():
+                self._advance_environment()
+            self._stop.wait(self._tick_interval_s)
+
+    def _run_npc_query_loop(self) -> None:
+        while not self._stop.is_set():
+            if not self._paused.is_set():
+                self._query_npcs()
+            self._stop.wait(self._npc_query_interval_s)
+
     def tick(self) -> None:
-        event = self._environment.tick()
-        phase = event.time_of_day.value
+        """Force one full beat right now -- advance the environment and
+        query every idle NPC, regardless of npc_query_interval_s. Not used
+        by run_forever() (which paces the two separately); this is for
+        tests and any other caller that wants an immediate, deterministic
+        beat instead of waiting on the real-time schedule.
+        """
+        self._advance_environment()
+        self._query_npcs()
+
+    def _advance_environment(self) -> None:
+        self._environment.tick()
+
+    def _query_npcs(self) -> None:
+        phase = self._environment.time_of_day.value
+        weather = self._environment.weather.value
+        clock = self._environment.clock
 
         # An NPC who was pulled into a conversation by someone else's turn
-        # this tick has already acted -- ticking them again would be a
+        # this round has already acted -- querying them again would be a
         # second turn in the same beat, not a fresh moment.
         acted: set[str] = set()
         for agent in self._registry.all():
@@ -63,10 +118,10 @@ class Simulation:
                 continue
 
             scene = Scene(
-                time=phase,
-                context=f"It's {phase} and {event.weather.value} out. Decide what you do right now, guided by your habits.",
+                time=f"{clock} ({phase})",
+                context=f"It's {clock}, {phase}, and {weather} out. Decide what you do right now, guided by your habits.",
             )
-            result = agent.respond(f"It is now {phase}.", scene=scene)
+            result = agent.respond(f"It is now {clock} ({phase}).", scene=scene)
             acted.add(name)
             self._last_activity[name] = self._describe(result)
 
@@ -99,7 +154,7 @@ class Simulation:
             return None
 
         scene = Scene(
-            time=self._environment.time_of_day.value,
+            time=f"{self._environment.clock} ({self._environment.time_of_day.value})",
             context=(
                 f"The player has walked up and is speaking with you directly. "
                 f"It's {self._environment.weather.value} out."
@@ -118,10 +173,27 @@ class Simulation:
         tool_result = result.action["result"]
         return tool_result if isinstance(tool_result, str) else result.action["name"]
 
+    def _queries_per_game_minute(self) -> float:
+        """How often idle NPCs get queried, expressed in game-time instead
+        of real-time -- how many query rounds happen per in-game minute.
+        Real query rounds happen every npc_query_interval_s real seconds;
+        game-minutes pass at environment.minutes_per_tick every
+        tick_interval_s real seconds. Ratio of the two rates:
+
+            (1 / npc_query_interval_s) / (minutes_per_tick / tick_interval_s)
+          = tick_interval_s / (npc_query_interval_s * minutes_per_tick)
+        """
+        return self._tick_interval_s / (self._npc_query_interval_s * self._environment.minutes_per_tick)
+
     def state(self) -> dict[str, Any]:
         return {
+            "clock": self._environment.clock,
             "time_of_day": self._environment.time_of_day.value,
             "weather": self._environment.weather.value,
+            "paused": self.is_paused(),
+            "tick_interval_s": self._tick_interval_s,
+            "npc_query_interval_s": self._npc_query_interval_s,
+            "queries_per_game_minute": self._queries_per_game_minute(),
             "npcs": [
                 {
                     "name": agent.identity.name,

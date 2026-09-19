@@ -13,9 +13,10 @@ def main() -> None:
         while True:
             input()
             event = env.tick()
-            line = f"time: {event.time_of_day.value} | weather: {event.weather.value}" + (
-                " (changed)" if event.weather_changed else ""
-            )
+            line = (
+                f"clock: {event.clock} ({event.time_of_day.value}) | weather: {event.weather.value}"
+                f" | temperature: {event.temperature}F"
+            ) + (" (changed)" if event.weather_changed else "")
             if event.travelers_arrived:
                 for traveler in event.travelers_arrived:
                     line += f" | traveler arrived: {traveler.name}, {traveler.origin}, {traveler.reason} ({', '.join(traveler.traits)})"

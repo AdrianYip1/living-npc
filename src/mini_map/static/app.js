@@ -1,7 +1,7 @@
 // The scrolling grid and player dot are still a local placeholder -- WASD/
 // arrow keys drive the player directly, and will be replaced once a real
-// player position comes from the backend. Play/pause, mic-hold, and the
-// conversation log are likewise still local-only.
+// player position comes from the backend. Mic-hold and the conversation
+// log's typing/rendering are likewise still local-only.
 //
 // NPCs, though, are real: their positions come from polling /api/state on
 // the mini_map server, which runs game_agents' NPCRegistry behind an
@@ -9,6 +9,12 @@
 // coordinates run -100..100 on each axis (see game_agents/world.py);
 // WORLD_SCALE below maps that onto this canvas's own (larger, arbitrary)
 // world-unit space.
+//
+// Play/pause is real too: it POSTs to /api/pause and /api/resume, which
+// actually stop/resume the server's world tick loop (environment clock +
+// NPC LLM queries), not just a client-side dim. state.paused also gates
+// player movement and traveler spawning locally, and gets resynced from
+// the server's own `paused` flag on every /api/state poll.
 //
 // Travelers are still a separate, client-only placeholder category: one
 // drifts in from a random map edge every so often, fades in, walks a
@@ -40,6 +46,9 @@ const STATE_POLL_MS = 2000;
 
 const statusTime = document.getElementById("status-time");
 const statusWeather = document.getElementById("status-weather");
+const statusTickInterval = document.getElementById("status-tick-interval");
+const statusNpcQueryInterval = document.getElementById("status-npc-query-interval");
+const statusQueriesPerMinute = document.getElementById("status-queries-per-minute");
 const statusPlaystate = document.getElementById("status-playstate");
 const statusMic = document.getElementById("status-mic");
 const conversationEl = document.getElementById("conversation");
@@ -66,9 +75,12 @@ const camera = { x: 0, y: 0 };
 const velocity = { x: 0, y: 0 };
 
 // Direction the player is facing, in radians (0 = right, screen-space).
-// Only updated while a move key is held, so the arrow keeps pointing the
-// last-faced direction once the player coasts to a stop.
+// Derived from the actual velocity vector each frame (not the raw 8-way
+// key input) so the arrow follows the curve of accel/decel through turns
+// instead of snapping between 8 fixed angles. Held steady below
+// FACING_MIN_SPEED so it doesn't jitter to noise while coasting to a stop.
 let facingAngle = -Math.PI / 2; // start facing up
+const FACING_MIN_SPEED = 4; // world units/sec
 
 // Real NPCs, kept live by polling /api/state. Colors are assigned once per
 // name (on first sighting) and then held stable across polls, since the
@@ -85,11 +97,29 @@ function colorFor(name) {
 }
 
 function applyState(data) {
-  if (typeof data.time_of_day === "string") {
-    statusTime.textContent = data.time_of_day;
+  if (typeof data.clock === "string") {
+    statusTime.textContent = data.clock;
   }
   if (typeof data.weather === "string") {
     statusWeather.textContent = data.weather;
+  }
+  // These two are launch-time constants (--tick-interval /
+  // --npc-query-interval), but reading them off the server's own state
+  // rather than hardcoding them keeps this display honest if the backend
+  // was started with non-default values.
+  if (typeof data.tick_interval_s === "number") {
+    statusTickInterval.textContent = `${data.tick_interval_s}s`;
+  }
+  if (typeof data.npc_query_interval_s === "number") {
+    statusNpcQueryInterval.textContent = `${data.npc_query_interval_s}s`;
+  }
+  if (typeof data.queries_per_game_minute === "number") {
+    statusQueriesPerMinute.textContent = data.queries_per_game_minute.toFixed(2);
+  }
+  if (typeof data.paused === "boolean") {
+    // Server-authoritative sync, not a user action -- updates the label/
+    // dimming to match reality (e.g. after a reload) without re-POSTing.
+    applyPausedUI(data.paused);
   }
 
   const byName = new Map(npcs.map((npc) => [npc.name, npc]));
@@ -132,7 +162,7 @@ async function pollState() {
 const travelers = [];
 
 function spawnTraveler() {
-  if (travelers.length >= MAX_TRAVELERS) {
+  if (state.paused || travelers.length >= MAX_TRAVELERS) {
     return;
   }
 
@@ -341,55 +371,62 @@ function tick(now) {
   const dt = (now - lastFrameTime) / 1000;
   lastFrameTime = now;
 
-  let dx = 0;
-  let dy = 0;
-  for (const key of pressedKeys) {
-    const dir = MOVE_KEYS[key];
-    if (dir) {
-      dx += dir[0];
-      dy += dir[1];
+  if (!state.paused) {
+    let dx = 0;
+    let dy = 0;
+    for (const key of pressedKeys) {
+      const dir = MOVE_KEYS[key];
+      if (dir) {
+        dx += dir[0];
+        dy += dir[1];
+      }
     }
-  }
 
-  if (dx !== 0 || dy !== 0) {
-    facingAngle = Math.atan2(dy, dx);
-    const length = Math.hypot(dx, dy);
-    velocity.x += (dx / length) * ACCEL * dt;
-    velocity.y += (dy / length) * ACCEL * dt;
-    const speed = Math.hypot(velocity.x, velocity.y);
-    if (speed > MAX_SPEED) {
-      velocity.x = (velocity.x / speed) * MAX_SPEED;
-      velocity.y = (velocity.y / speed) * MAX_SPEED;
+    if (dx !== 0 || dy !== 0) {
+      const length = Math.hypot(dx, dy);
+      velocity.x += (dx / length) * ACCEL * dt;
+      velocity.y += (dy / length) * ACCEL * dt;
+      const speed = Math.hypot(velocity.x, velocity.y);
+      if (speed > MAX_SPEED) {
+        velocity.x = (velocity.x / speed) * MAX_SPEED;
+        velocity.y = (velocity.y / speed) * MAX_SPEED;
+      }
+    } else {
+      const speed = Math.hypot(velocity.x, velocity.y);
+      if (speed > 0) {
+        const nextSpeed = Math.max(0, speed - DECEL * dt);
+        const scale = nextSpeed / speed;
+        velocity.x *= scale;
+        velocity.y *= scale;
+      }
     }
-  } else {
-    const speed = Math.hypot(velocity.x, velocity.y);
-    if (speed > 0) {
-      const nextSpeed = Math.max(0, speed - DECEL * dt);
-      const scale = nextSpeed / speed;
-      velocity.x *= scale;
-      velocity.y *= scale;
+
+    const currentSpeed = Math.hypot(velocity.x, velocity.y);
+    if (currentSpeed > FACING_MIN_SPEED) {
+      facingAngle = Math.atan2(velocity.y, velocity.x);
     }
+
+    camera.x += velocity.x * dt;
+    camera.y += velocity.y * dt;
+
+    if (camera.x > MAP_HALF) {
+      camera.x = MAP_HALF;
+      velocity.x = 0;
+    } else if (camera.x < -MAP_HALF) {
+      camera.x = -MAP_HALF;
+      velocity.x = 0;
+    }
+    if (camera.y > MAP_HALF) {
+      camera.y = MAP_HALF;
+      velocity.y = 0;
+    } else if (camera.y < -MAP_HALF) {
+      camera.y = -MAP_HALF;
+      velocity.y = 0;
+    }
+
+    updateTravelers(dt);
   }
 
-  camera.x += velocity.x * dt;
-  camera.y += velocity.y * dt;
-
-  if (camera.x > MAP_HALF) {
-    camera.x = MAP_HALF;
-    velocity.x = 0;
-  } else if (camera.x < -MAP_HALF) {
-    camera.x = -MAP_HALF;
-    velocity.x = 0;
-  }
-  if (camera.y > MAP_HALF) {
-    camera.y = MAP_HALF;
-    velocity.y = 0;
-  } else if (camera.y < -MAP_HALF) {
-    camera.y = -MAP_HALF;
-    velocity.y = 0;
-  }
-
-  updateTravelers(dt);
   updateNearbyNPC();
   drawWorld();
   requestAnimationFrame(tick);
@@ -428,10 +465,23 @@ function updateNearbyNPC() {
   proximityHint.classList.toggle("hidden", !nearbyNPC || nearbyNPC.busy || state.conversationOpen);
 }
 
-function setPaused(paused) {
+function applyPausedUI(paused) {
   state.paused = paused;
   statusPlaystate.textContent = paused ? "Paused" : "Playing";
   canvas.classList.toggle("paused", paused);
+}
+
+// The player-facing action: updates locally right away (feels instant) and
+// tells the server to actually stop/resume the world tick loop -- while
+// paused, the environment clock stops and NPCs stop getting queried, not
+// just a cosmetic dim (see mini_map/simulation.py's Simulation.pause()).
+async function setPaused(paused) {
+  applyPausedUI(paused);
+  try {
+    await postJSON(paused ? "/api/pause" : "/api/resume", {});
+  } catch (err) {
+    // best effort -- the next state poll resyncs from server truth anyway
+  }
 }
 
 function setMicActive(active) {
@@ -516,6 +566,8 @@ function isTypingTarget(target) {
 }
 
 window.addEventListener("resize", resizeCanvas);
+
+statusPlaystate.addEventListener("click", () => setPaused(!state.paused));
 
 document.addEventListener("keydown", (event) => {
   if (event.code === "Escape" && state.conversationOpen) {

@@ -16,11 +16,20 @@
     <div class="status-row">
       <span id="status-weather" class="value">--</span>
     </div>
-    <div class="status-row">
-      <span id="status-speed" class="value">1x</span>
+    <div class="status-row status-row--labeled">
+      <span class="label" title="Real seconds per in-game tick -- how often the clock/weather advance">World tick</span>
+      <span id="status-tick-interval" class="value">--</span>
+    </div>
+    <div class="status-row status-row--labeled">
+      <span class="label" title="Real seconds between rounds of querying every idle NPC's LLM">NPC query</span>
+      <span id="status-npc-query-interval" class="value">--</span>
+    </div>
+    <div class="status-row status-row--labeled">
+      <span class="label" title="NPC query rounds per in-game minute, derived from World tick and NPC query above">Queries/game-min</span>
+      <span id="status-queries-per-minute" class="value">--</span>
     </div>
     <div class="status-row">
-      <span id="status-playstate" class="value">Paused</span>
+      <button id="status-playstate" class="value playstate-btn" type="button">Paused</button>
     </div>
     <div class="status-row">
       <span id="status-mic" class="value">Off</span>
