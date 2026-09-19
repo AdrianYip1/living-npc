@@ -8,8 +8,10 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 struct cgltf_node;
+struct cgltf_mesh;
 struct cgltf_data;
 struct cgltf_skin;
 struct cgltf_animation;
@@ -34,9 +36,13 @@ namespace HTN {
 
 	class Loader {
 	public:
-		static bool loadModel(const std::string& modelPath, fModel& out, Skeleton& skeleton);
+		static bool loadModel(const std::string& modelPath, fModel& out, Skeleton& skeleton, bool instanced = false);
 
 	private:
 		static void recurseNodes(cgltf_node* node, fModel& out, u32& weightBase);
+		static void collectMeshInstances(cgltf_node* node, std::vector<cgltf_mesh*>& order,
+			std::unordered_map<cgltf_mesh*, std::vector<enginemath::Mat4>>& instances);
+		static void buildInstancedMesh(cgltf_mesh* mesh, fModel& out,
+			const std::vector<enginemath::Mat4>& transforms);
 	};
 } // namespace HTN

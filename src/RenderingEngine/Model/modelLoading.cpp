@@ -9,6 +9,7 @@
 #include <cmath>
 #include <string>
 #include <stdexcept>
+#include <unordered_map>
 
 static std::string decodeUri(const char* s) {
 	auto hex = [](char c) -> int {
@@ -63,7 +64,7 @@ static void slerp(float out[4], const float a[4], const float b0[4], float t) {
 	for (int k = 0; k < 4; k++) out[k] = a[k]*s0 + b[k]*s1;
 }
 
-bool HTN::Loader::loadModel(const std::string& modelPath, fModel& out, Skeleton& skeleton) {
+bool HTN::Loader::loadModel(const std::string& modelPath, fModel& out, Skeleton& skeleton, bool instanced) {
 	cgltf_options options = {};
 	cgltf_data* data = nullptr;
 
@@ -76,14 +77,25 @@ bool HTN::Loader::loadModel(const std::string& modelPath, fModel& out, Skeleton&
 		throw std::runtime_error("Failed to load gltf buffers: " + modelPath);
 	}
 
-	u32 weightBase = 0;
-	for (cgltf_size i = 0; i < data->scene->nodes_count; i++) {
-		recurseNodes(data->scene->nodes[i], out, weightBase);
+	if (instanced) {
+		std::vector<cgltf_mesh*> meshOrder;
+		std::unordered_map<cgltf_mesh*, std::vector<enginemath::Mat4>> instances;
+		for (cgltf_size i = 0; i < data->scene->nodes_count; i++) {
+			collectMeshInstances(data->scene->nodes[i], meshOrder, instances);
+		}
+		for (cgltf_mesh* mesh : meshOrder) {
+			buildInstancedMesh(mesh, out, instances[mesh]);
+		}
+		cgltf_free(data);
+	} else {
+		u32 weightBase = 0;
+		for (cgltf_size i = 0; i < data->scene->nodes_count; i++) {
+			recurseNodes(data->scene->nodes[i], out, weightBase);
+		}
+		skeleton.data = data;
+		skeleton.skin = data->skins_count ? &data->skins[0] : nullptr;
+		skeleton.anim = data->animations_count ? &data->animations[0] : nullptr;
 	}
-
-	skeleton.data = data;
-	skeleton.skin = data->skins_count ? &data->skins[0] : nullptr;
-	skeleton.anim = data->animations_count ? &data->animations[0] : nullptr;
 
 	return true;
 }
@@ -235,6 +247,104 @@ void HTN::Loader::recurseNodes(cgltf_node* node, fModel& out, u32& weightBase) {
 
 	for (cgltf_size i = 0; i < node->children_count; i++) {
 		recurseNodes(node->children[i], out, weightBase);
+	}
+}
+
+void HTN::Loader::collectMeshInstances(cgltf_node* node, std::vector<cgltf_mesh*>& order,
+	std::unordered_map<cgltf_mesh*, std::vector<enginemath::Mat4>>& instances) {
+
+	if (node->mesh) {
+		if (instances.find(node->mesh) == instances.end()) {
+			order.push_back(node->mesh);
+		}
+		f32 worldCoord[16];
+		cgltf_node_transform_world(node, worldCoord);
+		instances[node->mesh].push_back(enginemath::Mat4(
+			enginemath::Vec4(worldCoord[0], worldCoord[1], worldCoord[2], worldCoord[3]),
+			enginemath::Vec4(worldCoord[4], worldCoord[5], worldCoord[6], worldCoord[7]),
+			enginemath::Vec4(worldCoord[8], worldCoord[9], worldCoord[10], worldCoord[11]),
+			enginemath::Vec4(worldCoord[12], worldCoord[13], worldCoord[14], worldCoord[15])
+		));
+	}
+
+	for (cgltf_size i = 0; i < node->children_count; i++) {
+		collectMeshInstances(node->children[i], order, instances);
+	}
+}
+
+void HTN::Loader::buildInstancedMesh(cgltf_mesh* mesh, fModel& out,
+	const std::vector<enginemath::Mat4>& transforms) {
+
+	u32 instanceOffset = static_cast<u32>(out.instanceTransforms.size());
+	for (const auto& t : transforms) {
+		out.instanceTransforms.push_back(t);
+	}
+	u32 instanceCount = static_cast<u32>(transforms.size());
+
+	for (cgltf_size i = 0; i < mesh->primitives_count; i++) {
+		cgltf_primitive* primitive = &mesh->primitives[i];
+
+		cgltf_accessor* posAccessor = nullptr;
+		cgltf_accessor* normalAccessor = nullptr;
+		cgltf_accessor* texAccessor = nullptr;
+
+		for (cgltf_size a = 0; a < primitive->attributes_count; a++) {
+			cgltf_attribute* attribute = &primitive->attributes[a];
+			if (attribute->type == cgltf_attribute_type_position) posAccessor = attribute->data;
+			else if (attribute->type == cgltf_attribute_type_normal) normalAccessor = attribute->data;
+			else if (attribute->type == cgltf_attribute_type_texcoord) texAccessor = attribute->data;
+		}
+
+		if (!posAccessor) continue;
+
+		u32 indexStart = static_cast<u32>(out.indices.size());
+		u32 vertexOffset = static_cast<u32>(out.vertices.size());
+		cgltf_size posCount = posAccessor->count;
+
+		for (cgltf_size p = 0; p < posCount; p++) {
+			Vertex vertex{};
+			cgltf_accessor_read_float(posAccessor, p, vertex.position.elements, 3);
+			if (normalAccessor) cgltf_accessor_read_float(normalAccessor, p, vertex.normal.elements, 3);
+			if (texAccessor) cgltf_accessor_read_float(texAccessor, p, vertex.texCoord.data, 2);
+			vertex.color = {0.8f, 0.8f, 0.8f};
+			out.vertices.push_back(vertex);
+		}
+
+		if (primitive->indices) {
+			for (cgltf_size k = 0; k < primitive->indices->count; k++) {
+				cgltf_size index = cgltf_accessor_read_index(primitive->indices, k);
+				out.indices.push_back(static_cast<u32>(index) + vertexOffset);
+			}
+		} else {
+			for (cgltf_size k = 0; k < posCount; k++) {
+				out.indices.push_back(static_cast<u32>(k) + vertexOffset);
+			}
+		}
+
+		u32 indexCount = static_cast<u32>(out.indices.size()) - indexStart;
+
+		std::string textureUri;
+		enginemath::Vec4 baseColor(1.0f, 1.0f, 1.0f, 1.0f);
+		cgltf_material* mat = primitive->material;
+		if (mat && mat->has_pbr_metallic_roughness) {
+			cgltf_float* bcf = mat->pbr_metallic_roughness.base_color_factor;
+			baseColor = enginemath::Vec4(bcf[0], bcf[1], bcf[2], bcf[3]);
+			cgltf_texture* tex = mat->pbr_metallic_roughness.base_color_texture.texture;
+			if (tex && tex->image && tex->image->uri)
+				textureUri = decodeUri(tex->image->uri);
+		}
+
+		submesh sm{};
+		sm.indexStart = indexStart;
+		sm.indexCount = indexCount;
+		sm.vertexOffset = vertexOffset;
+		sm.vertexCount = static_cast<u32>(posCount);
+		sm.textureUri = textureUri;
+		sm.baseColor = baseColor;
+		sm.instanced = 1;
+		sm.instanceOffset = instanceOffset;
+		sm.instanceCount = instanceCount;
+		out.primitives.push_back(sm);
 	}
 }
 

@@ -194,10 +194,12 @@ void HTN::Renderer::createDescriptors() {
 	Descriptor::createDescriptorPool(device,
 		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+		 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
 		descriptorPool, materialCount);
 
 	VkBuffer deltasBuffer = model.getDeltasBuffer();
+	VkBuffer instanceBuf = model.getInstanceBuffer();
 
 	for (auto& [uri, tex] : textures) {
 		VkDescriptorImageInfo imageInfo{};
@@ -206,14 +208,15 @@ void HTN::Renderer::createDescriptors() {
 		imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
 		Descriptor::createDescriptorSets(device, pipeline.getUboSetLayout(), descriptorPool,
-			{0, 1, 2, 3, 4, 5},
+			{0, 1, 2, 3, 4, 5, 6},
 			{uniform.getUniformBuffers(), uniform.getLightUniformBuffers(),
 			 {deltasBuffer, deltasBuffer}, uniform.getWeightBuffers(),
-			 uniform.getJointBuffers(), {}},
-			{{}, {}, {}, {}, {}, imageInfo},
+			 uniform.getJointBuffers(), {}, {instanceBuf, instanceBuf}},
+			{{}, {}, {}, {}, {}, imageInfo, {}},
 			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
 			materialSets[uri]);
 	}
 }

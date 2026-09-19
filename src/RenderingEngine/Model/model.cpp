@@ -10,6 +10,10 @@ HTN::Model::~Model() {
 		vkDestroyBuffer(device->getDevice(), deltasBuffer, nullptr);
 		vkFreeMemory(device->getDevice(), deltasBufferMemory, nullptr);
 	}
+	if (instanceBuffer != VK_NULL_HANDLE) {
+		vkDestroyBuffer(device->getDevice(), instanceBuffer, nullptr);
+		vkFreeMemory(device->getDevice(), instanceBufferMemory, nullptr);
+	}
 }
 
 bool HTN::Model::createModel(Device& _device, fModel _model, Model* _fmodel) {
@@ -21,6 +25,7 @@ bool HTN::Model::createModel(Device& _device, fModel _model, Model* _fmodel) {
 	_fmodel->createVertexBuffer();
 	_fmodel->createIndexBuffer();
 	if (!_fmodel->model.deltas.empty()) _fmodel->createDeltasBuffer();
+	_fmodel->createInstanceBuffer();
 
 	return true;
 }
@@ -54,8 +59,10 @@ void HTN::Model::draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLa
 		push.useTexture = s.textureUri.empty() ? 0u : 1u;
 		push.isSkinned = s.isSkinned;
 		push.jointBase = jointBase;
+		push.instanced = s.instanced;
+		push.instanceOffset = s.instanceOffset;
 		vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
-		vkCmdDrawIndexed(commandBuffer, s.indexCount, 1, s.indexStart, 0, 0);
+		vkCmdDrawIndexed(commandBuffer, s.indexCount, s.instanceCount, s.indexStart, 0, 0);
 	}
 }
 
@@ -135,6 +142,38 @@ void HTN::Model::createDeltasBuffer() {
 		deltasBufferMemory);
 
 	Buffer::copyBuffer(*device, stagingBuffer, deltasBuffer, bufferSize);
+
+	vkDestroyBuffer(device->getDevice(), stagingBuffer, nullptr);
+	vkFreeMemory(device->getDevice(), stagingBufferMemory, nullptr);
+}
+
+void HTN::Model::createInstanceBuffer() {
+	std::vector<enginemath::Mat4> data;
+	if (model.instanceTransforms.empty()) {
+		data.push_back(enginemath::Mat4::identity());
+	} else {
+		data = model.instanceTransforms;
+	}
+
+	VkDeviceSize bufferSize = sizeof(enginemath::Mat4) * data.size();
+
+	VkBuffer stagingBuffer;
+	VkDeviceMemory stagingBufferMemory;
+
+	Buffer::createBuffer(*device, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+		VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+		stagingBuffer, stagingBufferMemory);
+
+	void* mapped;
+	vkMapMemory(device->getDevice(), stagingBufferMemory, 0, bufferSize, 0, &mapped);
+	memcpy(mapped, data.data(), bufferSize);
+	vkUnmapMemory(device->getDevice(), stagingBufferMemory);
+
+	Buffer::createBuffer(*device, bufferSize,
+		VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, instanceBuffer, instanceBufferMemory);
+
+	Buffer::copyBuffer(*device, stagingBuffer, instanceBuffer, bufferSize);
 
 	vkDestroyBuffer(device->getDevice(), stagingBuffer, nullptr);
 	vkFreeMemory(device->getDevice(), stagingBufferMemory, nullptr);

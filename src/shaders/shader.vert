@@ -25,6 +25,10 @@ layout(std430, set = 0, binding = 4) readonly buffer PaletteBuffer {
     mat4 palette[];
 };
 
+layout(std430, set = 0, binding = 6) readonly buffer InstanceBuffer {
+    mat4 instances[];
+} instanceBuffer;
+
 layout(push_constant) uniform MorphPush {
     mat4 model;
     vec4 baseColor;
@@ -37,6 +41,8 @@ layout(push_constant) uniform MorphPush {
     uint useTexture;
     uint isSkinned;
     uint jointBase;
+    uint instanced;
+    uint instanceOffset;
 } PushConstants;
 
 layout(location = 0) out vec3 fragColor;
@@ -69,9 +75,14 @@ void main() {
         normal = mat3(skin) * inNormal;
     }
 
-    gl_Position = ubo.proj * ubo.view * PushConstants.model * vec4(pos, 1.0);
+    mat4 worldMat = PushConstants.model;
+    if (PushConstants.instanced == 1u) {
+        worldMat = instanceBuffer.instances[PushConstants.instanceOffset + gl_InstanceIndex];
+    }
+
+    gl_Position = ubo.proj * ubo.view * worldMat * vec4(pos, 1.0);
     fragColor = inColor;
-    fragNormal = mat3(PushConstants.model) * normal;
+    fragNormal = mat3(worldMat) * normal;
     fragTexCoord = inTexCoord;
     fragBaseColor = PushConstants.baseColor.rgb;
     fragUseTexture = PushConstants.useTexture;

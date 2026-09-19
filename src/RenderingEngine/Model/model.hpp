@@ -79,6 +79,9 @@ namespace HTN {
 		std::string textureUri;
 		enginemath::Vec4 baseColor = enginemath::Vec4(1.0f, 1.0f, 1.0f, 1.0f);
 		u32 isSkinned = 0;
+		u32 instanced = 0;
+		u32 instanceOffset = 0;
+		u32 instanceCount = 1;
 	};
 
 	struct MorphPush {
@@ -93,6 +96,8 @@ namespace HTN {
 		u32 useTexture = 0;
 		u32 isSkinned = 0;
 		u32 jointBase = 0;
+		u32 instanced = 0;
+		u32 instanceOffset = 0;
 	};
 
 	struct fModel {
@@ -101,6 +106,7 @@ namespace HTN {
 		std::vector<submesh> primitives;
 		std::vector<enginemath::Vec4> deltas;
 		std::vector<enginemath::Mat4> inverseBindMatrix;
+		std::vector<enginemath::Mat4> instanceTransforms;
 	};
 
 	class Model {
@@ -120,6 +126,7 @@ namespace HTN {
 		const std::vector<submesh>& getPrimitives() const { return model.primitives; }
 
 		VkBuffer getDeltasBuffer() { return deltasBuffer; }
+		VkBuffer getInstanceBuffer() { return instanceBuffer; }
 
 	private:
 		Device* device = nullptr;
@@ -130,11 +137,14 @@ namespace HTN {
 		VkDeviceMemory indexBufferMemory = VK_NULL_HANDLE;
 		VkBuffer deltasBuffer = VK_NULL_HANDLE;
 		VkDeviceMemory deltasBufferMemory = VK_NULL_HANDLE;
+		VkBuffer instanceBuffer = VK_NULL_HANDLE;
+		VkDeviceMemory instanceBufferMemory = VK_NULL_HANDLE;
 
 		fModel model;
 
 		void createVertexBuffer();
 		void createIndexBuffer();
 		void createDeltasBuffer();
+		void createInstanceBuffer();
 	};
 } // namespace HTN
