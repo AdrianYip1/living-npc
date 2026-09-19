@@ -32,6 +32,13 @@ endforeach()
 
 add_custom_target(shaders DEPENDS ${SPV_FILES})
 
+foreach(SPV ${SPV_FILES})
+    get_filename_component(SPV_NAME ${SPV} NAME)
+    add_custom_command(TARGET shaders POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SPV} ${CMAKE_BINARY_DIR}/shaders/${SPV_NAME})
+endforeach()
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/shaders)
+
 add_library(imgui STATIC
     external/imgui/imgui.cpp
     external/imgui/imgui_draw.cpp

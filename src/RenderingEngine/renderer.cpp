@@ -3,7 +3,7 @@
 HTN::Renderer::Renderer(Window& _window) :
 	window(_window),
 	device(_window),
-	pipeline(device, "src/shaders/shader.vert.spv", "src/shaders/shader.frag.spv"),
+	pipeline(device, "shaders/shader.vert.spv", "shaders/shader.frag.spv"),
 	drawing(device, pipeline) {
 	createSyncObjects();
 }
