@@ -9,11 +9,12 @@
 #include "Model/model.hpp"
 #include "Model/uniform.hpp"
 #include "Platform/window.hpp"
+#include "Core/camera.hpp"
 
 namespace HTN {
 	class Renderer {
 	public:
-		Renderer(Window& _window);
+		Renderer(Window& _window, Camera& _camera);
 		~Renderer();
 		Renderer(const Renderer&) = delete;
 		Renderer& operator=(const Renderer&) = delete;
@@ -23,6 +24,7 @@ namespace HTN {
 
 	private:
 		Window& window;
+		Camera& camera;
 		Device device;
 		Pipeline pipeline;
 		Drawing drawing;

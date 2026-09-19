@@ -67,7 +67,10 @@ add_executable(living_npc
     src/RenderingEngine/Model/model.cpp
     src/RenderingEngine/Model/uniform.cpp
     src/RenderingEngine/Model/texture.cpp
-    src/RenderingEngine/Model/modelLoading.cpp)
+    src/RenderingEngine/Model/modelLoading.cpp
+    src/RenderingEngine/Core/camera.cpp
+    src/RenderingEngine/Core/input.cpp
+    src/RenderingEngine/Core/cameraControls.cpp)
 
 add_custom_command(TARGET living_npc POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory

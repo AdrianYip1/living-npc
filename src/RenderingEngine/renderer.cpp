@@ -8,8 +8,9 @@
 
 #include <enginemath/mat4.hpp>
 
-HTN::Renderer::Renderer(Window& _window) :
+HTN::Renderer::Renderer(Window& _window, Camera& _camera) :
 	window(_window),
+	camera(_camera),
 	device(_window),
 	pipeline(device, "shaders/shader.vert.spv", "shaders/shader.frag.spv"),
 	drawing(device, pipeline),
@@ -59,15 +60,11 @@ void HTN::Renderer::drawFrame() {
 	vkResetFences(device.getDevice(), 1, &inFlightFences[currentFrame]);
 	vkResetCommandBuffer(drawing.getCommandBuffer(currentFrame), 0);
 
-	UBO ubo{};
-	ubo.view = enginemath::Mat4::lookAtM(
-		enginemath::Vec3(0.0f, 1.56f, 0.5f),
-		enginemath::Vec3(0.0f, 1.56f, 0.0f),
-		enginemath::Vec3(0.0f, 1.0f, 0.0f));
+	camera.setAspect(static_cast<f32>(device.getExtent().width) / static_cast<f32>(device.getExtent().height));
 
-	f32 aspect = static_cast<f32>(device.getExtent().width) / static_cast<f32>(device.getExtent().height);
-	ubo.proj = enginemath::Mat4::projectionM(0.7854f, aspect, 0.1f, 100.0f);
-	ubo.proj.m[1][1] *= -1.0f;
+	UBO ubo{};
+	ubo.view = camera.getView();
+	ubo.proj = camera.getProj();
 
 	uniform.updateUniformBuffer(currentFrame, ubo);
 	uniform.updateLightBuffer(currentFrame, light);
