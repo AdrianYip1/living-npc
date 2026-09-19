@@ -35,16 +35,18 @@
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
 const GRID_SIZE = 48;
-const NPC_RADIUS = 32;
+const NPC_RADIUS = 24;
 const PLAYER_RADIUS = NPC_RADIUS;
 const INTERACT_RANGE = 120; // world units; how close the player must be to talk
 const MAP_SIZE = 1200; // world units, arbitrary for now
 const MAP_HALF = MAP_SIZE / 2;
-const MAX_SPEED = 260; // world px/sec
+const PLAYER_MAX_SPEED = 195; // world px/sec
+// Mirrors game_agents/world.py's NPC_MAX_SPEED (130 / WORLD_SCALE 6).
+const NPC_MAX_SPEED = 130; // world px/sec
 const ACCEL = 900; // px/sec^2 while a move key is held
 const DECEL = 1400; // px/sec^2 once keys are released
 // A traveler deciding what to do mid-walk slows to this fraction of
-// MAX_SPEED -- mirrors game_agents/world.py's HESITATE_SPEED_FACTOR.
+// NPC_MAX_SPEED -- mirrors game_agents/world.py's HESITATE_SPEED_FACTOR.
 const HESITATE_SPEED_FACTOR = 0.25;
 const PERSISTENT_NPC_COLOR = "#2196f3";
 const TRAVELER_COLOR = "#ff9800";
@@ -628,11 +630,10 @@ function drawBubbles() {
   }
 }
 
-// A faint dashed link between each pair currently in conversation.
+// A faint solid link between each pair currently in conversation.
 function drawConversationLinks() {
   const byName = new Map(npcs.map((npc) => [npc.name, npc]));
   ctx.save();
-  ctx.setLineDash([3 / view.zoom, 4 / view.zoom]);
   ctx.lineWidth = 2 / view.zoom;
   ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
   for (const npc of npcs) {
@@ -839,9 +840,9 @@ function tick(now) {
       velocity.x += (dx / length) * ACCEL * dt;
       velocity.y += (dy / length) * ACCEL * dt;
       const speed = Math.hypot(velocity.x, velocity.y);
-      if (speed > MAX_SPEED) {
-        velocity.x = (velocity.x / speed) * MAX_SPEED;
-        velocity.y = (velocity.y / speed) * MAX_SPEED;
+      if (speed > PLAYER_MAX_SPEED) {
+        velocity.x = (velocity.x / speed) * PLAYER_MAX_SPEED;
+        velocity.y = (velocity.y / speed) * PLAYER_MAX_SPEED;
       }
     } else {
       const speed = Math.hypot(velocity.x, velocity.y);
@@ -886,9 +887,9 @@ function tick(now) {
 }
 
 // JS twin of game_agents/world.py's step_toward(), in canvas units: walk
-// toward `destination` (or brake to a stop if null) with the player's own
-// MAX_SPEED / ACCEL / DECEL, braking early enough to stop on the spot.
-function stepToward(body, destination, dt, maxSpeed = MAX_SPEED) {
+// toward `destination` (or brake to a stop if null) with NPC_MAX_SPEED and
+// the player's own ACCEL / DECEL, braking early enough to stop on the spot.
+function stepToward(body, destination, dt, maxSpeed = NPC_MAX_SPEED) {
   const speed = Math.hypot(body.vx, body.vy);
 
   if (!destination) {
@@ -933,7 +934,7 @@ function updateNpcs(dt) {
     // right down while deciding what to do (see Simulation's `deciding`).
     // Predicting a walk the server isn't doing means snapping back on
     // every poll.
-    const maxSpeed = npc.deciding ? MAX_SPEED * HESITATE_SPEED_FACTOR : MAX_SPEED;
+    const maxSpeed = npc.deciding ? NPC_MAX_SPEED * HESITATE_SPEED_FACTOR : NPC_MAX_SPEED;
     stepToward(npc, npc.busy ? null : npc.destination, dt, maxSpeed);
     npc.x += npc.errX * k;
     npc.y += npc.errY * k;

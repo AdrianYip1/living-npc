@@ -285,8 +285,8 @@ class SoakRegressionTests(unittest.TestCase):
             taken.append(spot)
 
     def test_icons_do_not_overlap_at_personal_space(self):
-        # NPC_RADIUS 32px and WORLD_SCALE 6 in app.js: an icon is ~10.7 units wide.
-        self.assertGreater(PERSONAL_SPACE, 2 * 32 / 6)
+        # NPC_RADIUS 24px and WORLD_SCALE 6 in app.js: an icon is 8 units wide.
+        self.assertGreater(PERSONAL_SPACE, 2 * 24 / 6)
         self.assertLess(PERSONAL_SPACE, INTERACTION_RANGE)
 
     def test_move_tool_keeps_personal_space(self):

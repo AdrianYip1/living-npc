@@ -202,7 +202,7 @@ class TravelerAgentTests(unittest.TestCase):
             traveler, _ = _admit_one(sim)
             name = traveler.identity.name
 
-            _walk(sim, 15)  # the map is 200 units wide; NPC top speed is ~43/s
+            _walk(sim, 25)  # the map is 200 units wide; NPC top speed is ~22/s
 
             self.assertIsNone(sim._registry.get(name))
             self.assertNotIn(name, [npc["name"] for npc in sim.state()["npcs"]])

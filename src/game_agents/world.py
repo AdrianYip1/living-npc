@@ -60,7 +60,7 @@ def render_surroundings(
 
 
 # How close (map units) one NPC stops to another: a little more than an
-# icon's width on the mini-map (NPC_RADIUS 32px / WORLD_SCALE 6, doubled,
+# icon's width on the mini-map (NPC_RADIUS 24px / WORLD_SCALE 6, doubled,
 # in mini_map/static/app.js), so neighbors never draw on top of each other,
 # yet still inside INTERACTION_RANGE -- walking up to someone gets you
 # close enough to talk.
@@ -102,11 +102,11 @@ def keep_personal_space(
     return max(candidates, key=room)
 
 
-# NPC walking physics, in map units -- the player's own MAX_SPEED / ACCEL /
-# DECEL from mini_map/static/app.js (260 / 900 / 1400, in canvas units),
-# divided by its WORLD_SCALE of 6 canvas units per map unit, so NPCs move
-# exactly like the player does. Keep the two in sync.
-NPC_MAX_SPEED = 260 / 6  # map units/sec
+# NPC walking physics, in map units -- NPC_MAX_SPEED / ACCEL / DECEL from
+# mini_map/static/app.js (130 / 900 / 1400, in canvas units), divided by its
+# WORLD_SCALE of 6 canvas units per map unit. NPCs accelerate and brake like
+# the player but walk slower. Keep the two in sync.
+NPC_MAX_SPEED = 130 / 6  # map units/sec
 NPC_ACCEL = 900 / 6  # map units/sec^2 while speeding up / turning
 NPC_DECEL = 1400 / 6  # map units/sec^2 while braking
 # While an NPC is deciding what to do mid-walk (see NPCRegistry.
