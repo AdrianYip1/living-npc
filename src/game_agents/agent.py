@@ -6,7 +6,14 @@ from typing import Any
 
 from .identity import DEFAULT_PROFILE_TEMPLATE, Identity
 from .inventory import Inventory
-from .llm import ENDS_CONVERSATION_FIELD, SPEAK_TOOL_NAME, SPEAK_TOOL_SCHEMA, LLMClient, LLMResult
+from .llm import (
+    ENDS_CONVERSATION_FIELD,
+    PLAYER_NAME_FIELD,
+    SPEAK_TOOL_NAME,
+    SPEAK_TOOL_SCHEMA,
+    LLMClient,
+    LLMResult,
+)
 from .memory import Memory, MemoryStore
 from .tools import ToolRegistry
 
@@ -51,6 +58,10 @@ CONVERSATION_ONLY_ACTIONS = frozenset({"buy_item", "sell_item"})
 # `with_player`): noting their name, or selling to them, makes no sense
 # with anyone else.
 PLAYER_ONLY_ACTIONS = frozenset({"note_player_name", "sell_to_player"})
+
+# What a model fills PLAYER_NAME_FIELD with when the player hasn't actually
+# given a name -- taken as "no name yet", not as what to call them.
+NON_NAMES = frozenset({"player", "the player", "unknown", "stranger", "none", "n/a", "traveler", "traveller"})
 
 
 @dataclass
@@ -157,7 +168,11 @@ class Agent:
 
         def offer(hide: frozenset[str]) -> list[dict[str, Any]]:
             return [
-                *([] if SPEAK_TOOL_NAME in hide else [self._speak_schema(conversation=conversation)]),
+                *(
+                    []
+                    if SPEAK_TOOL_NAME in hide
+                    else [self._speak_schema(conversation=conversation, with_player=with_player)]
+                ),
                 *(
                     schema
                     for schema in self.tools.schemas()
@@ -203,6 +218,8 @@ class Agent:
             utterance = self._cap_utterance(call.arguments.get("text", ""))
             action = None
             ends_conversation = conversation and bool(call.arguments.get(ENDS_CONVERSATION_FIELD, False))
+            if with_player:
+                self._note_player_name(call.arguments.get(PLAYER_NAME_FIELD))
             memory_content = f"{stimulus} -> {utterance}"
         else:
             utterance = None
@@ -226,7 +243,22 @@ class Agent:
             return True
         return name in (CONVERSATION_HIDDEN_ACTIONS if conversation else CONVERSATION_ONLY_ACTIONS)
 
-    def _speak_schema(self, *, conversation: bool = False) -> dict[str, Any]:
+    def _note_player_name(self, given: Any) -> None:
+        """The name the player gave, caught on the same line that heard it
+        (see PLAYER_NAME_FIELD). Only ever set once: whatever they said
+        first is their name, and a later line mentioning someone else
+        shouldn't rename them.
+        """
+        if self.player_name is not None or not isinstance(given, str):
+            return
+        cleaned = " ".join(given.split())
+        # Models fill the field with their own name, or a placeholder, when
+        # the player hasn't actually said one.
+        if not cleaned or cleaned.lower() in NON_NAMES or cleaned.lower() == self.identity.name.lower():
+            return
+        self.player_name = cleaned
+
+    def _speak_schema(self, *, conversation: bool = False, with_player: bool = False) -> dict[str, Any]:
         schema = SPEAK_TOOL_SCHEMA
         # Outside a conversation, a spoken line has no one to answer it --
         # models kept using it to address people instead of talking with
@@ -241,23 +273,31 @@ class Agent:
             description += f" You're a person of few words: at most {self.max_utterance_words} words."
         if description != schema["description"]:
             schema = {**schema, "description": description}
+        # Extra fields, folded in together so a turn can carry both -- a
+        # goodbye that also catches a name shouldn't have to pick one.
+        extra: dict[str, Any] = {}
         if conversation:
+            extra[ENDS_CONVERSATION_FIELD] = {
+                "type": "boolean",
+                "description": (
+                    "True if this line is your goodbye and the conversation is over. "
+                    "Leave it false while there's still something to say."
+                ),
+            }
+        if with_player and self.player_name is None:
+            extra[PLAYER_NAME_FIELD] = {
+                "type": "string",
+                "description": (
+                    "The player's own name, if they've told you it by now -- theirs, not yours. "
+                    "Fill it in on the line you hear it and you'll know them by it from then on. "
+                    "Leave it out until they've actually said it."
+                ),
+            }
+        if extra:
             parameters = schema["parameters"]
             schema = {
                 **schema,
-                "parameters": {
-                    **parameters,
-                    "properties": {
-                        **parameters["properties"],
-                        ENDS_CONVERSATION_FIELD: {
-                            "type": "boolean",
-                            "description": (
-                                "True if this line is your goodbye and the conversation is over. "
-                                "Leave it false while there's still something to say."
-                            ),
-                        },
-                    },
-                },
+                "parameters": {**parameters, "properties": {**parameters["properties"], **extra}},
             }
         return schema
 

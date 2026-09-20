@@ -23,7 +23,7 @@ from environment_agent.time_of_day import MINUTES_PER_DAY
 from environment_agent.travelers import Traveler, spare_names
 
 from game_agents.agent import CONVERSATION_ONLY_ACTIONS, Agent, Scene, TurnResult
-from game_agents.conversation import ConversationHooks, ConversationTurn, save_transcript
+from game_agents.conversation import ConversationHooks, ConversationTurn, conversation_recap, save_transcript
 from game_agents.conversation_export import (
     PLAYER_ID,
     PLAYER_PARTICIPANT,
@@ -300,7 +300,9 @@ class Simulation:
         # The player's current conversation as a transcript, and the file
         # it's saved to -- rewritten after every line, so a conversation cut
         # short (the server stopped) still leaves everything said so far.
-        self._player_log: tuple[Path, list[ConversationTurn]] | None = None
+        # The transcript is kept either way (it's what the NPC's recap is
+        # built from on end); only the saving needs somewhere to save to.
+        self._player_log: tuple[Path | None, list[ConversationTurn]] | None = None
         self._player_lock = threading.Lock()
         # The direction each NPC last moved in, so it keeps facing that way
         # once it stops (see export_npc_state), and when that last went out.
@@ -983,7 +985,11 @@ class Simulation:
         talked_at = self._talked_at.get(frozenset((initiator, target)))
         if talked_at is None or self._environment.elapsed_minutes - talked_at >= self.REPEAT_CONVERSATION_MINUTES:
             return None
-        return f"You only just talked with {target} -- there's nothing new to say yet. Leave them be for now."
+        agent = self._registry.get(initiator)
+        who = target
+        if target == PLAYER_ID:
+            who = agent.player_name if agent is not None and agent.player_name else "the player"
+        return f"You only just talked with {who} -- there's nothing new to say yet. Leave them be for now."
 
     def _hold_for_line(self, key: frozenset[str], *, finished: bool = False) -> None:
         """Holds a conversation until its latest line is done: spoken aloud,
@@ -1113,10 +1119,8 @@ class Simulation:
     def _begin_player_log(self, stem: str) -> None:
         """Named like NPC-to-NPC transcripts: whoever started it first."""
         log_dir = self._registry.conversation_log_dir
-        if log_dir is None:
-            self._player_log = None
-            return
-        self._player_log = (log_dir / f"{stem}_{int(time.time() * 1000)}.json", [])
+        path = None if log_dir is None else log_dir / f"{stem}_{int(time.time() * 1000)}.json"
+        self._player_log = (path, [])
 
     def _log_player_turn(self, name: str, turn: ConversationTurn) -> None:
         with self._player_lock:
@@ -1124,7 +1128,8 @@ class Simulation:
                 return
             path, transcript = self._player_log
             transcript.append(turn)
-            save_transcript(transcript, path)
+            if path is not None:
+                save_transcript(transcript, path)
 
     def _log_npc_reply(self, name: str, stimulus: str, result: TurnResult) -> None:
         self._log_player_turn(
@@ -1235,9 +1240,12 @@ class Simulation:
             if self._player_partner != name:
                 return
             self._player_partner = None
-            self._player_log = None  # already on disk, line by line
+            # Already on disk, line by line -- kept here only long enough
+            # for the recap (see _remember_player_conversation).
+            player_log, self._player_log = self._player_log, None
             if self._player_invite is not None and self._player_invite["name"] == name:
                 self._player_invite = None
+        self._remember_player_conversation(name, [] if player_log is None else player_log[1])
         with self._export_lock:
             export = self._player_export
             if export is not None and export[1] == name:
@@ -1247,6 +1255,40 @@ class Simulation:
         if export is not None:
             self._exporter.end(export[0])
         self._registry.release(name)
+
+    def _remember_player_conversation(self, name: str, transcript: list[ConversationTurn]) -> None:
+        """What _on_conversation_end does for two NPCs, for a conversation
+        with the player: start the pair's cooldown, give whoever they were
+        talking to a turn with AFTER_CONVERSATION hidden, and leave behind
+        the recap memory that makes the next meeting a second one.
+
+        The player used to get none of this -- no cooldown, so an NPC could
+        re-open the moment it ended, and no recap, so all that survived
+        were single tagged lines that importance-7 action records outrank.
+        Being followed around by someone who greets you as a stranger every
+        time is both halves of that.
+        """
+        self._talked_at[frozenset((name, PLAYER_ID))] = self._environment.elapsed_minutes
+        self._last_activity[name] = "talked with the player"
+        agent = self._registry.get(name)
+        if agent is None or not any(turn.utterance for turn in transcript):
+            # Nothing said (the NPC acted instead, or the opening failed):
+            # no conversation to recap or follow up on, same as an NPC-to-
+            # NPC exchange that never got started.
+            return
+        # The player goes into the recap as this NPC knows them, not as the
+        # export's "player" id -- it's their own memory of the exchange.
+        known_as = agent.player_name or "the player"
+        remembered = [
+            replace(turn, speaker=known_as) if turn.speaker == PLAYER_ID else replace(turn, listener=known_as)
+            for turn in transcript
+        ]
+        agent.memory.add(conversation_recap(remembered, name), importance=6)
+        st = self._traveler_state.get(name)
+        if st is not None:
+            st.talked_with = known_as
+        else:
+            self._just_talked.add(name)
 
     def say(self, name: str, text: str) -> dict[str, Any] | None:
         agent = self._registry.get(name)
