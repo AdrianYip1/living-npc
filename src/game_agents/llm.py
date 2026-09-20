@@ -22,6 +22,15 @@ SPEAK_TOOL_SCHEMA: dict[str, Any] = {
 # Agent.respond's `conversation`): the speaker marking a line as a goodbye.
 ENDS_CONVERSATION_FIELD = "ends_conversation"
 
+# Extra speak-tool field offered only while talking with the player (see
+# Agent.respond's `with_player`), and only until the NPC knows the name:
+# the player's name, caught on the same line that heard it. The
+# note_player_name tool does the same thing, but as an action it costs the
+# whole turn -- so a model with something to say almost never spent its one
+# call on it, and NPCs kept greeting someone they'd met repeatedly as a
+# stranger.
+PLAYER_NAME_FIELD = "player_name"
+
 
 @dataclass
 class ToolCall:

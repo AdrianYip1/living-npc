@@ -10,7 +10,7 @@ from game_agents.agent import Agent, Scene
 from game_agents.conversation import run_conversation
 from game_agents.identity import Identity
 from game_agents.inventory import Inventory, TradeError, trade
-from game_agents.llm import SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
+from game_agents.llm import ENDS_CONVERSATION_FIELD, SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
 from game_agents.memory import MemoryStore
 from game_agents.registry import NPCRegistry
 from game_agents.storage import (
@@ -809,6 +809,64 @@ class PlayerTests(unittest.TestCase):
             self.assertNotIn("note_player_name", {t["name"] for t in llm.last_tools})
             mara.respond("hi", conversation=True, with_player=True)
             self.assertIn("note_player_name", {t["name"] for t in llm.last_tools})
+
+    def test_a_name_is_caught_on_the_line_that_hears_it(self):
+        """The whole point of the speak field: noting the name costs no
+        turn, so an NPC can answer the player *and* remember them.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            reply = ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "Raymond, is it?", "player_name": " Raymond "})
+            mara = self._registry(tmp, _RecordingLLM(reply)).get("Mara")
+
+            result = mara.respond('The player says: "I\'m Raymond"', conversation=True, with_player=True)
+
+            self.assertEqual(result.utterance, "Raymond, is it?")
+            self.assertEqual(mara.player_label(), "Raymond (the player)")
+
+    def test_the_name_field_is_offered_only_until_the_name_is_known(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _RecordingLLM()
+            mara = self._registry(tmp, llm).get("Mara")
+
+            def speak_fields() -> set[str]:
+                speak = next(t for t in llm.last_tools if t["name"] == SPEAK_TOOL_NAME)
+                return set(speak["parameters"]["properties"])
+
+            mara.respond("hi", conversation=True)
+            self.assertNotIn("player_name", speak_fields())
+            mara.respond("hi", conversation=True, with_player=True)
+            # Alongside ends_conversation, not instead of it: a goodbye can
+            # still be the line that catches the name.
+            self.assertEqual(speak_fields(), {"text", ENDS_CONVERSATION_FIELD, "player_name"})
+
+            mara.player_name = "Raymond"
+            mara.respond("hi", conversation=True, with_player=True)
+            self.assertNotIn("player_name", speak_fields())
+
+    def test_a_name_that_isnt_one_leaves_them_a_stranger(self):
+        """Models fill the field in with a placeholder, or with their own
+        name, on a turn where the player never gave one.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            for given in ("", "   ", "the player", "Unknown", "mara"):
+                mara = self._registry(tmp, _RecordingLLM(
+                    ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "Aye.", "player_name": given})
+                )).get("Mara")
+
+                mara.respond("hi", conversation=True, with_player=True)
+
+                self.assertIsNone(mara.player_name, f"{given!r} should not be taken as a name")
+
+    def test_the_first_name_given_is_the_one_that_sticks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _RecordingLLM(ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "Aye.", "player_name": "Raymond"}))
+            mara = self._registry(tmp, llm).get("Mara")
+            mara.respond("hi", conversation=True, with_player=True)
+
+            llm._reply = ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "Aye.", "player_name": "Finn"})
+            mara.respond("Finn came up too", conversation=True, with_player=True)
+
+            self.assertEqual(mara.player_name, "Raymond")
 
     def test_selling_to_the_player_needs_only_the_goods(self):
         with tempfile.TemporaryDirectory() as tmp:

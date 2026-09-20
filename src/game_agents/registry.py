@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .agent import Agent
 from .conversation import ConversationHooks, conversation_recap, run_conversation, save_transcript
+from .conversation_export import PLAYER_ID
 from .identity import DEFAULT_PROFILE_TEMPLATE
 from .inventory import Inventory, TradeError, trade
 from .llm import LLMClient
@@ -445,7 +446,16 @@ class NPCRegistry:
         gap = distance(self._agents[name].position, self.player_position)
         if gap > INTERACTION_RANGE:
             return f"The player is {gap:.0f} units away -- you need to be within {INTERACTION_RANGE} to talk."
-        invite = self.conversation_hooks.invite_player
+        hooks = self.conversation_hooks
+        # The same cooldown any other pair gets (see ConversationHooks.
+        # refuse, keyed on PLAYER_ID for this side). Without it the player
+        # was the one person in town you could walk straight back up to the
+        # moment you'd finished talking to them -- so the chatty NPCs did,
+        # over and over.
+        refusal = hooks.refuse(name, PLAYER_ID) if hooks.refuse is not None else None
+        if refusal is not None:
+            return refusal
+        invite = hooks.invite_player
         if invite is None:
             return "You can't talk to the player right now."
         # The hook claims this NPC and opens the conversation on the

@@ -572,6 +572,91 @@ class SimulationPlayerConversationTests(unittest.TestCase):
             self.assertFalse(registry.is_busy("Mara"))
             self.assertTrue(sim.start_conversation("Finn"))
 
+    def test_the_player_gets_the_same_cooldown_as_anyone_else(self):
+        """Without it the player was the one person in town an NPC could
+        walk straight back up to the moment they'd finished -- so the
+        chatty ones did, over and over.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, MockLLMClient(), names=("Mara",))
+            registry.get("Mara").position = (0, 0)
+            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
+            sim.set_player_position(5, 0)
+            talk = lambda: registry.get("Mara").tools.execute("initiate_conversation", {"target_name": "the player"})
+
+            sim.start_conversation("Mara")
+            sim.say("Mara", "hello there")
+            sim.end_conversation("Mara")
+
+            self.assertIn("You only just talked with the player", talk())
+
+            # Named, once they know it -- and free again after the wait.
+            registry.get("Mara").player_name = "Raymond"
+            self.assertIn("You only just talked with Raymond", talk())
+            sim._environment._elapsed_minutes += Simulation.REPEAT_CONVERSATION_MINUTES
+            self.assertEqual(talk(), "You start a conversation with the player.")
+
+    def test_a_conversation_the_player_never_answered_still_starts_the_cooldown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, MockLLMClient(), names=("Mara",))
+            registry.get("Mara").position = (0, 0)
+            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
+            sim.set_player_position(5, 0)
+
+            sim.start_conversation("Mara")
+            sim.end_conversation("Mara")
+
+            self.assertIn(
+                "You only just talked with",
+                registry.get("Mara").tools.execute("initiate_conversation", {"target_name": "the player"}),
+            )
+            # Nothing was said, so there's nothing to recap or follow up on.
+            self.assertEqual(registry.get("Mara").memory.all(), [])
+
+    def test_talking_to_the_player_is_remembered_as_a_conversation(self):
+        """A recap, like an NPC-to-NPC exchange leaves -- untagged and
+        outranking the per-line fragments, so the next meeting is a second
+        one instead of a first.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = _registry(tmp, MockLLMClient(), names=("Mara",))
+            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
+            mara = registry.get("Mara")
+            mara.player_name = "Raymond"
+
+            sim.start_conversation("Mara")
+            sim.say("Mara", "morning")
+            sim.end_conversation("Mara")
+
+            [recap] = [m for m in mara.memory.all() if m.content.startswith("Earlier you talked with")]
+            self.assertEqual((recap.importance, recap.tags), (6, set()))
+            self.assertIn("Earlier you talked with Raymond", recap.content)
+            self.assertIn("Raymond: morning", recap.content)
+
+    def test_the_next_turn_after_the_player_leaves_cannot_re_open(self):
+        class _ToolsLLM:
+            """Records what the last turn was actually offered."""
+
+            def __init__(self):
+                self.last_tools: list[dict] = []
+
+            def complete(self, *, system, messages, tools):
+                self.last_tools = tools
+                return LLMResult(tool_call=ToolCall(name=SPEAK_TOOL_NAME, arguments={"text": "aye"}))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            llm = _ToolsLLM()
+            registry = _registry(tmp, llm, names=("Mara",))
+            sim = Simulation(registry, EnvironmentAgent(seed=1), line_pacing=False)
+
+            sim.start_conversation("Mara")
+            sim.say("Mara", "morning")
+            sim.end_conversation("Mara")
+            sim.tick()
+            sim.wait_for_pending()
+
+            self.assertNotIn("initiate_conversation", {t["name"] for t in llm.last_tools})
+
     def test_player_conversation_is_saved_with_both_sides(self):
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp) / "log"
