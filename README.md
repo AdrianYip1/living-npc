@@ -3,11 +3,13 @@ Download the resources from the [latest release](https://github.com/AdrianYip1/l
 
 ## Living NPCs
 
-<a href="https://www.youtube.com/watch?v=ekAkxhsfbZo">
-  <img src="https://img.youtube.com/vi/ekAkxhsfbZo/maxresdefault.jpg" alt="Demo Video" width="600">
-</a>
-
-**[Watch the demo on YouTube](https://www.youtube.com/watch?v=ekAkxhsfbZo)**
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=ekAkxhsfbZo">
+    <img src="https://img.youtube.com/vi/ekAkxhsfbZo/maxresdefault.jpg" alt="Demo Video" width="600">
+  </a>
+  <br>
+  <b><a href="https://www.youtube.com/watch?v=ekAkxhsfbZo">Watch the demo on YouTube</a></b>
+</p>
 
 In most games, a key pillar of immersion and realism comes from the NPCs: non-player characters. How they act, what they say are all tools that a developer can use. However, there are only so many dialogue options, side quests, and reactions you can hard-code in. Inevitably, there are situations that it can't account for: the NPC fails to act or react in a appropriate manner, and the illusion for the player breaks.
 
@@ -15,7 +17,9 @@ For NPCs to feel **real**, they need to be able to handle all types of situation
 
 ## Part I - Game Agents
 
-<img src="screenshots/game_agents.png" alt="Game Agents" width="600">
+<p align="center">
+  <img src="screenshots/game_agents.png" alt="Game Agents" height="400">
+</p>
 
 An NPC that remembers your last conversation and acts on its own changes the feel of a game more than any amount of hand written dialogue. Effectively, we have created an sandbox game environment, where every NPC has is represented by an AI agent that has the ability to perceive, speak, and act.
 
@@ -25,7 +29,9 @@ The biggest challenge we had, which is a fairly common one for projects that rel
 
 ## Part II - 3D Rendering and Animations
 
-<img src="screenshots/3d_scene.png" alt="3D Scene" width="600">
+<p align="center">
+  <img src="screenshots/3d_scene.png" alt="3D Scene" width="600">
+</p>
 
 Game developers can't code every dialogue and action, and actors can't record every single possible line either. Therefore, we came up with a plan to deliver consistent and realistic facial animations, gestures, and voices to 3D models to accompany their backend logic.
 
@@ -35,7 +41,9 @@ These animations are run and visualized via a custom Vulkan API rendering engine
 
 ## Part III - Connecting The Game Agents in 3D
 
-<img src="screenshots/connecting.png" alt="Connecting in 3D" width="600">
+<p align="center">
+  <img src="screenshots/connecting.png" alt="Connecting in 3D" width="600">
+</p>
 
 The logic and ground truths of the 3D engine rely on the sandbox game environment mentioned in Part I. As NPCs are agentic in nature, their movements and actions are driven in this sandbox and reflected onto the Vulkan renderer. Talking to an NPC in the 3D world will drive a response from the sandbox, where Azure AI will then output the audio of this response and pass it to our procedural animation calculations in 3D.
 
