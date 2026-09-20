@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from environment_agent.agent import EnvironmentAgent
 
-from game_agents.bootstrap import CONVERSATION_LOG_DIR, TRAVELER_NAMES_PATH, build_registry
+from game_agents.bootstrap import CONVERSATION_LOG_DIR, TRAVELER_NAMES_PATH, build_registry, start_fresh
 from game_agents.conversation_export import ConversationExporter
 
 from . import speech
@@ -166,12 +166,21 @@ def run(
     port: int = PORT,
     *,
     open_browser: bool = True,
+    fresh: bool = False,
     ticks_per_real_minute: float = TICKS_PER_REAL_MINUTE,
     llm_calls_per_game_hour: float = LLM_CALLS_PER_GAME_HOUR,
 ) -> None:
     global _simulation
 
     _print_actions()
+    # Before build_registry(), which is what reads all of it back in.
+    if fresh:
+        archived = start_fresh()
+        print(
+            f"Starting fresh -- the last run's memories are in {archived}"
+            if archived is not None
+            else "Starting fresh -- there was nothing left over to put away."
+        )
     # Each run starts with an empty conversation_log/, so what's in there
     # is only ever this session's conversations.
     exporter = ConversationExporter(CONVERSATION_LOG_DIR)
@@ -258,6 +267,14 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help=(
+            "Start with NPCs who have never met you: the last run's memories, inventories and "
+            "known player names are moved into data/backup_<timestamp>/ first, not deleted."
+        ),
+    )
+    parser.add_argument(
         "--llm-calls-per-game-hour",
         type=float,
         default=LLM_CALLS_PER_GAME_HOUR,
@@ -272,4 +289,9 @@ def _parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = _parse_args()
-    run(port=args.port, ticks_per_real_minute=args.ticks_per_real_minute, llm_calls_per_game_hour=args.llm_calls_per_game_hour)
+    run(
+        port=args.port,
+        fresh=args.fresh,
+        ticks_per_real_minute=args.ticks_per_real_minute,
+        llm_calls_per_game_hour=args.llm_calls_per_game_hour,
+    )

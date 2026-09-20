@@ -6,6 +6,7 @@ and data paths instead of drifting apart.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -45,6 +46,42 @@ def _build_llm() -> tuple[LLMClient, str]:
     model = os.environ.get("GAME_AGENTS_MODEL")
     kwargs = {"model": model} if model else {}
     return backend_cls(**kwargs), name
+
+
+# Everything a run leaves behind that the next one would otherwise pick up
+# -- what the NPCs remember, what they're carrying, and what they call the
+# player. Moved aside together by start_fresh(): a town that remembers you
+# but has forgotten your name (or vice versa) is worse than either.
+#
+# Not TRAVELER_NAMES_PATH: it exists to stop the same traveler name coming
+# round again, and that's as true of a fresh run as any other.
+RUN_STATE_PATHS = (MEMORY_DIR, INVENTORY_DIR, PLAYER_NAMES_PATH)
+
+
+def start_fresh(paths: tuple[Path, ...] = RUN_STATE_PATHS, *, data_dir: Path = DATA_DIR) -> Path | None:
+    """Moves the last run's state into data/backup_<timestamp>/ so the next
+    one starts with a town that's never met anyone. Returns where it went,
+    or None if there was nothing to move.
+
+    Moved, not deleted: a demo run is exactly when you find out you wanted
+    yesterday's memories after all. Putting them back is a matter of moving
+    the folders back. (Every loader treats a missing file as "nothing yet"
+    -- see storage.load_memory -- so taking these away is enough.)
+    """
+    present = [path for path in paths if path.exists()]
+    if not present:
+        return None
+    # Matches the backup_*/ already in game_agents/.gitignore.
+    stamp = time.strftime("backup_%Y%m%d_%H%M%S")
+    destination = data_dir / stamp
+    suffix = 2
+    while destination.exists():  # two fresh starts in the same second
+        destination = data_dir / f"{stamp}_{suffix}"
+        suffix += 1
+    destination.mkdir(parents=True)
+    for path in present:
+        path.rename(destination / path.name)
+    return destination
 
 
 def build_registry() -> tuple[NPCRegistry, str]:
