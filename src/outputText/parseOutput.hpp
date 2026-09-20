@@ -5,6 +5,7 @@
 #include <string>
 #include <fstream>
 #include <vector>
+#include <map>
 
 namespace HTN {
 	struct SpokenLine {
@@ -24,6 +25,7 @@ namespace HTN {
 		outputParser& operator=(const outputParser& other) = delete;
 
 		SpokenLine getOutputText();
+		std::vector<SpokenLine> getAllOutputText();
 		bool startedNewConversation();
 		int activeSpeakerCount() const { return (int)speakers.size(); }
 
@@ -37,5 +39,6 @@ namespace HTN {
 		std::vector<std::string> speakers;
 		int turnIndex = 0;
 		bool switched = false;
+		std::map<std::string, int> convoTurnIndex;
 	};
 } // namespace HTN

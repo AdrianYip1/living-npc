@@ -105,3 +105,67 @@ HTN::SpokenLine HTN::outputParser::getOutputText() {
 	}
 	return SpokenLine{};
 }
+
+std::vector<HTN::SpokenLine> HTN::outputParser::getAllOutputText() {
+	std::vector<SpokenLine> results;
+
+	std::ifstream allIn(dirPath + "/all_active.json");
+	if (!allIn) return results;
+
+	nlohmann::json arr;
+	try { allIn >> arr; }
+	catch (const nlohmann::json::parse_error&) { return results; }
+	if (!arr.is_array()) return results;
+
+	for (const auto& entry : arr) {
+		std::string convoFile = entry.value("conversation", "");
+		if (convoFile.empty()) continue;
+
+		std::vector<std::string> spk;
+		if (entry.contains("speakers"))
+			for (const auto& s : entry["speakers"]) spk.push_back(s.get<std::string>());
+
+		int startSeq = entry.value("seq", 0);
+		std::string fullPath = dirPath + "/" + convoFile;
+
+		auto it = convoTurnIndex.find(convoFile);
+		if (it == convoTurnIndex.end()) {
+			convoTurnIndex[convoFile] = startSeq;
+			it = convoTurnIndex.find(convoFile);
+		}
+
+		std::ifstream in(fullPath);
+		if (!in) continue;
+
+		nlohmann::json obj;
+		while (true) {
+			try { in >> obj; }
+			catch (const nlohmann::json::parse_error&) { break; }
+			if (obj.value("phase", "") == "end") break;
+			if (obj.value("seq", -1) < it->second) continue;
+
+			std::string speaker = obj.value("speaker_id", "");
+			int slot = -1;
+			for (size i = 0; i < spk.size(); i++)
+				if (spk[i] == speaker) { slot = (int)i; break; }
+
+			if (slot < 0 || obj.value("text", "") == "") {
+				it->second = obj.value("seq", -1) + 1;
+				continue;
+			}
+
+			it->second = obj.value("seq", -1) + 1;
+			SpokenLine line;
+			line.slot = slot;
+			line.speakerName = speaker;
+			line.text = obj.value("text", "");
+			line.gender = obj.value("gender", "");
+			line.seq = obj.value("seq", -1);
+			line.conversation = convoFile;
+			results.push_back(line);
+			break;
+		}
+	}
+
+	return results;
+}
