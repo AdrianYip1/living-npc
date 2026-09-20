@@ -11,6 +11,7 @@ layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
+    float time;
 } ubo;
 
 layout(std430, set = 0, binding = 2) readonly buffer MorphDeltas {
@@ -52,6 +53,7 @@ layout(location = 3) out vec3 fragBaseColor;
 layout(location = 4) flat out uint fragUseTexture;
 layout(location = 5) out float fragDist;
 layout(location = 6) out vec3 fragWorldPos;
+layout(location = 7) flat out float fragDayFraction;
 
 void main() {
     vec3 pos = inPosition;
@@ -90,6 +92,7 @@ void main() {
     fragBaseColor = PushConstants.baseColor.rgb;
     fragUseTexture = PushConstants.useTexture;
     fragWorldPos = worldPos.xyz;
+    fragDayFraction = ubo.time;
     vec4 viewPos = ubo.view * worldPos;
     fragDist = length(viewPos.xyz);
 }

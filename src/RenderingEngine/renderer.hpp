@@ -47,6 +47,7 @@ namespace HTN {
 		bool anyBusy() const;
 		void setNPCTransform(u32 slot, const enginemath::Mat4& t) { npcTransforms[slot] = t; }
 		void setNPCAnimState(u32 slot, AnimState state);
+		void setDayFraction(f32 frac) { dayFraction = frac; }
 		const WorldBounds& getWorldBounds() const { return WORLD_BOUNDS; }
 
 	private:
@@ -90,6 +91,7 @@ namespace HTN {
 		Clock animClock;
 
 		u32 currentFrame = 0;
+		f32 dayFraction = 0.25f;
 
 		std::vector<VkSemaphore> imageAvailableSemaphores;
 		std::vector<VkSemaphore> renderFinishedSemaphores;

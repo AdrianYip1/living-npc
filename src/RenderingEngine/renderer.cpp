@@ -143,13 +143,10 @@ void HTN::Renderer::drawFrame() {
 
 	camera.setAspect(static_cast<f32>(device.getExtent().width) / static_cast<f32>(device.getExtent().height));
 
-	static auto startTime = std::chrono::steady_clock::now();
-	f32 elapsed = std::chrono::duration<f32>(std::chrono::steady_clock::now() - startTime).count();
-
 	UBO ubo{};
 	ubo.view = camera.getView();
 	ubo.proj = camera.getProj();
-	ubo.time = elapsed;
+	ubo.time = dayFraction;
 
 	u32 count = npcCount();
 	f32 dt = animClock.elapsedMs() / 1000.0f;
@@ -177,6 +174,24 @@ void HTN::Renderer::drawFrame() {
 		}
 		allJoints.insert(allJoints.end(), pal.begin(), pal.end());
 	}
+
+	constexpr f32 PI = 3.14159265f;
+	f32 sunAngle = (dayFraction - 0.25f) * 2.0f * PI;
+	enginemath::Vec3 sunDir(cosf(sunAngle) * 0.7f, -sinf(sunAngle), sinf(sunAngle) * 0.3f);
+
+	bool isNight = sinf(sunAngle) < 0.0f;
+	if (isNight) {
+		light.color = enginemath::Vec3(0.08f, 0.08f, 0.15f);
+	} else {
+		f32 elevation = sinf(sunAngle);
+		f32 sunsetFactor = 1.0f - std::clamp(elevation * 5.0f, 0.0f, 1.0f);
+		light.color = enginemath::Vec3(
+			1.0f,
+			1.0f - sunsetFactor * 0.3f,
+			1.0f - sunsetFactor * 0.5f
+		) * std::clamp(elevation * 3.0f, 0.1f, 1.0f);
+	}
+	light.direction = sunDir;
 
 	enginemath::Vec3 rawDir = light.direction;
 	if (rawDir.magnitude() < 0.001f) rawDir = enginemath::Vec3(0.0f, -1.0f, 0.0f);

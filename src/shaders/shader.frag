@@ -7,6 +7,7 @@ layout(location = 3) in vec3 fragBaseColor;
 layout(location = 4) flat in uint fragUseTexture;
 layout(location = 5) in float fragDist;
 layout(location = 6) in vec3 fragWorldPos;
+layout(location = 7) flat in float fragDayFraction;
 
 layout(binding = 1) uniform LightUBO {
 	vec3 pos;
@@ -48,15 +49,39 @@ void main() {
 		shadow = currentDepth - bias > closestDepth ? 0.3 : 1.0;
 	}
 
-	vec3 ambient = 0.1 * albedo;
-	vec3 diffuse = shadow * nDiff * light.color * albedo;
+	float t = fract(fragDayFraction);
+	float dayBrightness;
+	vec3 fogTint;
+
+	if (t < 0.2) {
+		dayBrightness = 0.15;
+		fogTint = vec3(0.1, 0.1, 0.2);
+	} else if (t < 0.3) {
+		float s = (t - 0.2) / 0.1;
+		dayBrightness = mix(0.15, 1.0, s);
+		fogTint = mix(vec3(0.1, 0.1, 0.2), vec3(0.7, 0.75, 0.85), s);
+		fogTint += vec3(0.3, 0.15, 0.05) * s * (1.0 - s) * 4.0;
+	} else if (t < 0.7) {
+		dayBrightness = 1.0;
+		fogTint = vec3(0.7, 0.75, 0.85);
+	} else if (t < 0.8) {
+		float s = (t - 0.7) / 0.1;
+		dayBrightness = mix(1.0, 0.15, s);
+		fogTint = mix(vec3(0.7, 0.75, 0.85), vec3(0.1, 0.1, 0.2), s);
+		fogTint += vec3(0.3, 0.1, 0.0) * s * (1.0 - s) * 4.0;
+	} else {
+		dayBrightness = 0.15;
+		fogTint = vec3(0.1, 0.1, 0.2);
+	}
+
+	vec3 ambient = 0.1 * dayBrightness * albedo;
+	vec3 diffuse = shadow * nDiff * light.color * albedo * dayBrightness;
 	vec3 finalColor = ambient + diffuse;
 
-	const vec3 fogColor = vec3(0.7, 0.75, 0.85);
 	const float fogStart = 80.0;
 	const float fogEnd = 300.0;
 	float fogFactor = clamp((fragDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
-	finalColor = mix(finalColor, fogColor, fogFactor);
+	finalColor = mix(finalColor, fogTint, fogFactor);
 
 	outColor = vec4(finalColor, 1.0);
 }
