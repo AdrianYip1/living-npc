@@ -928,6 +928,13 @@ class Simulation:
             if self._registry.partner_of(a) != b:
                 self._end_export(key)
                 exports.pop(key)
+        all_convos: list[tuple[str, list[str]]] = []
+        if player_export is not None:
+            all_convos.append((player_export[0], [player_export[1]]))
+        for conversation_id, names in exports.values():
+            all_convos.append((conversation_id, names))
+        self._exporter.point_at_all(all_convos)
+
         if player_export is not None:
             self._exporter.point_at(player_export[0], [player_export[1]])
             return

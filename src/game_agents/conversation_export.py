@@ -302,6 +302,21 @@ class ConversationExporter:
             if self._replace(ACTIVE_POINTER, pointer):
                 self._pointer = pointer
 
+    def point_at_all(self, conversations: list[tuple[str, list[str]]]) -> None:
+        """Writes all_active.json with every ongoing conversation so the
+        renderer can animate and play audio for all of them in parallel.
+        """
+        with self._lock:
+            entries = []
+            for cid, speakers in conversations:
+                last = self._open.get(cid)
+                entries.append({
+                    "conversation": f"{cid}.jsonl",
+                    "speakers": list(speakers),
+                    "seq": 0 if last is None else last["seq"],
+                })
+            self._replace("all_active.json", entries)
+
     def write_npc_state(self, time_now: dict[str, Any], npcs: list[dict[str, Any]]) -> None:
         """Rewrites npc_state.json if it changed. `time_now` comes from
         time_state(); `npcs` are {"slot", "x", "z", "rot"} entries -- see
