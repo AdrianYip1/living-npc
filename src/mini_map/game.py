@@ -44,7 +44,7 @@ PORT = 8765
 TICKS_PER_REAL_MINUTE = 240.0
 # 4 calls/game-hr x 1 game-hr/real-min (at the default tick rate above) = 4
 # calls/real-min, i.e. one query round every 15s -- matches the old default.
-LLM_CALLS_PER_GAME_HOUR = 4.0
+LLM_CALLS_PER_GAME_HOUR = 3.0
 # Inclusive (min, max) traveler arrivals per in-game day. Deliberately high
 # for now so travelers are easy to spot: at the default clock speed (a day
 # every 24 real minutes) 10-20 is one every ~96 real seconds on average.

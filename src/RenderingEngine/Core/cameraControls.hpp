@@ -26,7 +26,7 @@ namespace HTN {
 		Input& input;
 		Camera& camera;
 
-		f32 cameraSpeed = 0.002f;
+		f32 cameraSpeed = 0.005f;
 		f32 smoothX = 0.0f, smoothY = 0.0f;
 		f64 xPos = 0.0f, yPos = 0.0f;
 		f32 smoothFactor = 0.3f;
