@@ -110,6 +110,10 @@ bool HTN::faceAnim::isBusy() {
 	return busy;
 }
 
+void HTN::faceAnim::setVolume(f32 vol) {
+	if (device) ma_device_set_master_volume(device.get(), vol);
+}
+
 void HTN::faceAnim::feedAudio(void* output, u32 frameCount) {
 	ma_uint64 framesRead = 0;
 	if (decoder) ma_decoder_read_pcm_frames(decoder.get(), output, frameCount, &framesRead);

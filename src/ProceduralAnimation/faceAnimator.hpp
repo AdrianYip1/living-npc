@@ -51,6 +51,7 @@ namespace HTN {
 		void setupSpeech();
 		void startSpeaking(const std::string& text);
 		void setVoice(const std::string& v) { voiceName = v; };
+		void setVolume(f32 vol);
 
 		bool isBusy();
 		void feedAudio(void* output, u32 frameCount);
