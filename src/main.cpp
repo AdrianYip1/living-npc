@@ -124,8 +124,10 @@ int main() {
 		std::vector<float> prevNpcX(renderer.faceCount(), -9999.0f);
 		std::vector<float> prevNpcZ(renderer.faceCount(), -9999.0f);
 		std::vector<bool> npcMoving(renderer.faceCount(), false);
+		std::vector<bool> npcActive(renderer.faceCount(), false);
 		std::vector<std::string> npcNames(renderer.faceCount());
 		std::vector<enginemath::Vec3> npcWorldPositions(renderer.faceCount());
+		std::vector<enginemath::Vec3> npcTargetPositions(renderer.faceCount());
 		std::vector<float> npcCurrentRot(renderer.faceCount(), 0.0f);
 		std::vector<float> npcTargetRot(renderer.faceCount(), 0.0f);
 
@@ -140,7 +142,9 @@ int main() {
 			controls.updatePos();
 
 			HTN::f32 floor = HTN::Raycast::getGround(camera.getPos(), renderer.getCollision(), renderer.getGroundGrid());
+			HTN::f32 groundY = 0.0f;
 			if (floor != -999.0f) {
+				groundY = floor;
 				enginemath::Vec3 pos = camera.getPos();
 				pos.y = floor + 3.3f;
 				camera.setPos(pos);
@@ -212,10 +216,15 @@ int main() {
 					try {
 						nlohmann::json state;
 						npcIn >> state;
-						if (state.contains("npcs")) {
+						if (state.contains("time")) {
+								renderer.setDayFraction(state["time"].value("day_fraction", 0.25f));
+							}
+							if (state.contains("npcs")) {
+							std::fill(npcActive.begin(), npcActive.end(), false);
 							for (const auto& npc : state["npcs"]) {
 								int slot = npc.value("slot", -1);
 								if (slot < 0 || slot >= (int)renderer.faceCount()) continue;
+								npcActive[slot] = true;
 								float nx = npc.value("x", 0.5f);
 								float nz = npc.value("z", 0.5f);
 								HTN::f32 wx = bounds.toWorldX(nx);
@@ -223,7 +232,9 @@ int main() {
 								npcTargetRot[slot] = npc.value("rot", 0.0f);
 
 								npcNames[slot] = npc.value("name", "");
-								npcWorldPositions[slot] = {wx, 0.0f, wz};
+								npcTargetPositions[slot] = {wx, 0.0f, wz};
+								if (prevNpcX[slot] < -9000.0f)
+									npcWorldPositions[slot] = npcTargetPositions[slot];
 
 								float dx = nx - prevNpcX[slot];
 								float dz = nz - prevNpcZ[slot];
@@ -240,17 +251,35 @@ int main() {
 
 			float dt = dtClock.elapsedMs() / 1000.0f;
 			dtClock.resetTime();
+			const float moveSpeed = 8.0f;
 			const float turnSpeed = 5.0f;
 			float t = turnSpeed * dt;
 			if (t > 1.0f) t = 1.0f;
+			float mt = moveSpeed * dt;
+			if (mt > 1.0f) mt = 1.0f;
 
 			for (HTN::u32 s = 0; s < renderer.faceCount(); s++) {
+				if (!npcActive[s]) {
+					renderer.setNPCTransform(s,
+						enginemath::Mat4::translationM(0.0f, -1000.0f, 0.0f));
+					prevNpcX[s] = -9999.0f;
+					continue;
+				}
+
 				if (npcMoving[s])
 					renderer.setNPCAnimState(s, HTN::AnimState::WALK);
 				else if (renderer.getFace(s).isBusy())
 					renderer.setNPCAnimState(s, HTN::AnimState::TALK);
 				else
 					renderer.setNPCAnimState(s, HTN::AnimState::IDLE);
+
+				npcWorldPositions[s].x += (npcTargetPositions[s].x - npcWorldPositions[s].x) * mt;
+				npcWorldPositions[s].z += (npcTargetPositions[s].z - npcWorldPositions[s].z) * mt;
+
+				enginemath::Vec3 npcRayOrigin = {npcWorldPositions[s].x, 500.0f, npcWorldPositions[s].z};
+				HTN::f32 npcFloor = HTN::Raycast::getGround(npcRayOrigin, renderer.getCollision(), renderer.getGroundGrid());
+				if (npcFloor != -999.0f)
+					npcWorldPositions[s].y = npcFloor;
 
 				float goal = npcTargetRot[s];
 				if (playerConversationActive && npcNames[s] == talkingToNPC) {
@@ -260,8 +289,16 @@ int main() {
 				}
 				npcCurrentRot[s] = lerpAngle(npcCurrentRot[s], goal, t);
 				renderer.setNPCTransform(s,
-					enginemath::Mat4::translationM(npcWorldPositions[s].x, 0.0f, npcWorldPositions[s].z)
+					enginemath::Mat4::translationM(npcWorldPositions[s].x, npcWorldPositions[s].y, npcWorldPositions[s].z)
 					* enginemath::Mat4::rotateY(npcCurrentRot[s]));
+
+				float dx = camera.getPos().x - npcWorldPositions[s].x;
+				float dz = camera.getPos().z - npcWorldPositions[s].z;
+				float dist = sqrtf(dx * dx + dz * dz);
+				const float fullVolDist = 5.0f;
+				const float fadeOutDist = 30.0f;
+				float vol = 1.0f - std::clamp((dist - fullVolDist) / (fadeOutDist - fullVolDist), 0.0f, 1.0f);
+				renderer.getFace(s).setVolume(vol * vol);
 			}
 
 			if (inFlight && !renderer.anyBusy()) {
