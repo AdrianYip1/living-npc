@@ -19,6 +19,8 @@
 #include <fstream>
 #include <filesystem>
 #include <queue>
+#include <map>
+#include <set>
 #include <cctype>
 #include <cmath>
 #include <thread>
@@ -85,10 +87,12 @@ namespace {
 	}
 
 	int findNearestNPC(const enginemath::Vec3& playerPos,
-					   const std::vector<enginemath::Vec3>& npcPositions) {
+					   const std::vector<enginemath::Vec3>& npcPositions,
+					   const std::vector<bool>& active) {
 		int nearest = -1;
 		float minDist = 999999.0f;
 		for (int i = 0; i < (int)npcPositions.size(); i++) {
+			if (!active[i]) continue;
 			float dx = playerPos.x - npcPositions[i].x;
 			float dz = playerPos.z - npcPositions[i].z;
 			float dist = dx * dx + dz * dz;
@@ -129,16 +133,16 @@ int main() {
 
 		HTN::Clock pollClock;
 		pollClock.resetTime();
+		HTN::Clock fpsClock;
+		int frameCount = 0;
 		HTN::outputParser outputText(CONVO_LOG_DIR);
 		std::queue<HTN::SpokenLine> speechQueue;
 		std::string npcStatePath = std::string(CONVO_LOG_DIR) + "/npc_state.json";
 		const HTN::WorldBounds& bounds = renderer.getWorldBounds();
 
-		bool inFlight = false;
-		std::string inFlightConversation;
-		int inFlightSeq = -1;
 		std::string ackConversation;
 		int ackSeq = -1;
+		std::map<int, std::string> slotConversation;
 
 		std::vector<float> prevNpcX(renderer.faceCount(), -9999.0f);
 		std::vector<float> prevNpcZ(renderer.faceCount(), -9999.0f);
@@ -154,24 +158,25 @@ int main() {
 		bool talkKeyWasDown = false;
 		std::string talkingToNPC;
 		bool playerConversationActive = false;
-
 		while (!window.checkClose()) {
 			controls.accumulateMovement();
 			controls.accumulateRotation();
 			controls.updatePos();
 
-			HTN::f32 floor = HTN::Raycast::getGround(camera.getPos(), renderer.getCollision(), renderer.getGroundGrid());
 			HTN::f32 groundY = 0.0f;
-			if (floor != -999.0f) {
-				groundY = floor;
-				enginemath::Vec3 pos = camera.getPos();
-				pos.y = floor + 3.3f;
-				camera.setPos(pos);
+			{
+				HTN::f32 floor = HTN::Raycast::getGround(camera.getPos(), renderer.getCollision(), renderer.getGroundGrid());
+				if (floor != -999.0f) {
+					groundY = floor;
+					enginemath::Vec3 pos = camera.getPos();
+					pos.y = floor + 3.3f;
+					camera.setPos(pos);
+				}
 			}
 
 			bool talkKeyDown = !ImGui::GetIO().WantCaptureKeyboard && input.keyPressed(GLFW_KEY_T);
 			if (talkKeyDown && !talkKeyWasDown) {
-				int nearest = findNearestNPC(camera.getPos(), npcWorldPositions);
+				int nearest = findNearestNPC(camera.getPos(), npcWorldPositions, npcActive);
 				if (nearest >= 0 && !npcNames[nearest].empty()) {
 					std::string targetNPC = npcNames[nearest];
 					if (targetNPC != talkingToNPC) {
@@ -318,28 +323,37 @@ int main() {
 				renderer.getFace(s).setVolume(vol * vol);
 			}
 
-			if (inFlight && !renderer.anyBusy()) {
-				ackConversation = inFlightConversation;
-				ackSeq = inFlightSeq;
-				inFlight = false;
-				writeSpokenAck(ackConversation, ackSeq);
+			for (auto it = slotConversation.begin(); it != slotConversation.end();) {
+				if (!renderer.getFace(it->first).isBusy()) {
+					it = slotConversation.erase(it);
+				} else {
+					++it;
+				}
 			}
 
 			{
+				std::set<std::string> busyConvos;
+				for (const auto& [slot, convo] : slotConversation)
+					busyConvos.insert(convo);
+
 				std::queue<HTN::SpokenLine> retry;
 				while (!speechQueue.empty()) {
 					HTN::SpokenLine next = speechQueue.front();
 					speechQueue.pop();
+
 					int slot = -1;
 					for (HTN::u32 i = 0; i < renderer.faceCount(); i++) {
 						if (npcNames[i] == next.speakerName) { slot = (int)i; break; }
 					}
-					if (slot >= 0 && !renderer.getFace(slot).isBusy()) {
+					if (slot >= 0 && !renderer.getFace(slot).isBusy() &&
+						busyConvos.find(next.conversation) == busyConvos.end()) {
 						renderer.getFace(slot).setVoice(voiceForGender(next.gender));
 						renderer.getFace(slot).startSpeaking(next.text);
-						inFlight = true;
-						inFlightConversation = next.conversation;
-						inFlightSeq = next.seq;
+						slotConversation[slot] = next.conversation;
+						busyConvos.insert(next.conversation);
+						ackConversation = next.conversation;
+						ackSeq = next.seq;
+						writeSpokenAck(ackConversation, ackSeq);
 					} else if (slot >= 0) {
 						retry.push(next);
 					}
@@ -349,6 +363,13 @@ int main() {
 
 			window.pollWindowEvents();
 			renderer.drawFrame();
+			frameCount++;
+			if (fpsClock.elapsedMs() >= 1000) {
+				std::string title = "Living Npc | " + std::to_string(frameCount) + " FPS";
+				glfwSetWindowTitle(window.getWindow(), title.c_str());
+				frameCount = 0;
+				fpsClock.resetTime();
+			}
 		}
 
 		if (playerConversationActive && !talkingToNPC.empty()) {
