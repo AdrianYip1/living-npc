@@ -140,12 +140,24 @@ class Simulation:
     conversation if there is one, otherwise at the NPC-to-NPC one nearest
     the player (whose position the page reports -- see
     set_player_position()).
+
+    Positions flow the other way too. NPC positions go out to the 3D
+    renderer as npc_state.json (see export_npc_state), and while that
+    renderer is running the player's own position comes back from it as
+    player_state.json (see apply_renderer_player): the person walks around
+    the 3D scene and their dot moves on the 2D map, instead of the page's
+    keys driving it.
     """
 
     MOVEMENT_HZ = 30.0
     # How often NPC positions go out to the renderer (npc_state.json) --
-    # it reads them every 250 ms.
+    # it reads them every 250 ms. The player's position is read back from
+    # the renderer on the same beat.
     NPC_STATE_INTERVAL_S = 0.1
+    # How long a position from the renderer keeps the page's own reported
+    # one out. Longer than the renderer's ~250 ms beat, short enough that
+    # the keys take back over right after it quits.
+    RENDERER_PLAYER_HOLD_S = 1.0
     # How many recent traveler arrivals state() keeps around. The page
     # spawns each one once, by id, so this only needs to cover arrivals
     # between two polls -- the rest is slack for a slow/backgrounded tab.
@@ -294,6 +306,10 @@ class Simulation:
         # once it stops (see export_npc_state), and when that last went out.
         self._facing: dict[str, tuple[float, float]] = {}
         self._npc_state_at = 0.0
+        # The player's facing, and when the renderer last placed them --
+        # only set while the 3D side is driving (see apply_renderer_player).
+        self._player_facing = -math.pi / 2
+        self._renderer_player_at = 0.0
         registry.conversation_hooks = ConversationHooks(
             run=self._run_conversation,
             on_start=self._on_conversation_start,
@@ -381,6 +397,7 @@ class Simulation:
             self.update_active_conversation()
             if now - self._npc_state_at >= self.NPC_STATE_INTERVAL_S:
                 self._npc_state_at = now
+                self.apply_renderer_player()
                 self.export_npc_state()
             self._stop.wait(1.0 / self.MOVEMENT_HZ)
 
@@ -846,9 +863,54 @@ class Simulation:
             self._exporter.end(export[0])
 
     def set_player_position(self, x: float, y: float) -> None:
+        """Where the page says the player is. Ignored while the 3D renderer
+        is placing them instead (see apply_renderer_player) so the two don't
+        fight over the same dot; the page takes back over a beat after the
+        renderer stops.
+        """
+        if self._renderer_drives_player():
+            return
+        self._place_player(x, y)
+
+    def _place_player(self, x: float, y: float) -> None:
         self._player_position = (x, y)
         # Where NPCs see the player, and check they're close enough to talk.
         self._registry.player_position = (x, y)
+
+    def _renderer_drives_player(self) -> bool:
+        return time.monotonic() - self._renderer_player_at < self.RENDERER_PLAYER_HOLD_S
+
+    def apply_renderer_player(self) -> bool:
+        """Puts the player where the 3D renderer has them -- npc_state.json
+        in reverse (see game_agents.conversation_export). Returns whether
+        the renderer was running: while it is, it owns the player's
+        position, and the page follows it (see state()) rather than its own
+        keys. Called on the movement loop's renderer beat, paused or not --
+        pausing freezes the autonomous world, not the person walking around
+        the 3D scene.
+        """
+        if self._exporter is None:
+            return False
+        placed = self._exporter.read_player_state()
+        if placed is None:
+            return False
+        (x, y), facing = placed
+        self._renderer_player_at = time.monotonic()
+        self._player_facing = facing
+        self._place_player(x, y)
+        return True
+
+    def _renderer_player(self) -> dict[str, float] | None:
+        """state()'s "player": where the renderer has the player, or None
+        when it isn't the one driving.
+        """
+        if not self._renderer_drives_player():
+            return None
+        return {
+            "x": round(self._player_position[0], 2),
+            "y": round(self._player_position[1], 2),
+            "facing": round(self._player_facing, 4),
+        }
 
     def update_active_conversation(self) -> None:
         """Points active.json at the player's conversation if there is one,
@@ -1260,6 +1322,9 @@ class Simulation:
             # An NPC-started conversation with the player, while it lasts --
             # the page opens its panel on seeing a new id.
             "player_invite": self._current_invite(),
+            # Where the 3D renderer has the player, while it's running --
+            # the page eases its dot there instead of driving it by key.
+            "player": self._renderer_player(),
             "npcs": [
                 {
                     "name": agent.identity.name,

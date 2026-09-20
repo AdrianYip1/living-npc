@@ -156,8 +156,8 @@ class NpcStateExportTests(unittest.TestCase):
             self.assertEqual(
                 state["npcs"],
                 [
-                    {"slot": 0, "x": 0.0, "z": 0.5, "rot": -1.571},
-                    {"slot": 1, "x": 1.0, "z": 1.0, "rot": 0.0},
+                    {"slot": 0, "name": "Mara", "x": 0.0, "z": 0.5, "rot": -1.571},
+                    {"slot": 1, "name": "Finn", "x": 1.0, "z": 1.0, "rot": 0.0},
                 ],
             )
 

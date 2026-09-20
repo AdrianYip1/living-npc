@@ -4,6 +4,7 @@ animation program -- these pin its exact shape.
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import time
@@ -15,6 +16,7 @@ from game_agents.conversation_export import (
     ConversationExporter,
     npc_participant,
     npc_state_entry,
+    player_from_renderer,
     sanitize_for_speech,
     time_state,
 )
@@ -251,8 +253,14 @@ class SpeechDoneTests(unittest.TestCase):
 
 class NpcStateTests(unittest.TestCase):
     def test_entry_normalizes_the_map_and_faces_the_last_movement(self):
-        self.assertEqual(npc_state_entry(0, (-100, 100), (0.0, 1.0)), {"slot": 0, "x": 0.0, "z": 1.0, "rot": 0.0})
-        self.assertEqual(npc_state_entry(1, (0, 50), (3.0, 0.0)), {"slot": 1, "x": 0.5, "z": 0.75, "rot": 1.571})
+        self.assertEqual(
+            npc_state_entry(0, (-100, 100), (0.0, 1.0), name="Mara"),
+            {"slot": 0, "name": "Mara", "x": 0.0, "z": 1.0, "rot": 0.0},
+        )
+        self.assertEqual(
+            npc_state_entry(1, (0, 50), (3.0, 0.0)),
+            {"slot": 1, "name": "", "x": 0.5, "z": 0.75, "rot": 1.571},
+        )
         self.assertEqual(npc_state_entry(2, (500, -500), (0.0, -1.0))["x"], 1.0)  # clamped
 
     def test_time_state(self):
@@ -288,11 +296,56 @@ class NpcStateTests(unittest.TestCase):
             directory = Path(tmp)
             (directory / "bounds.json").write_text("{}", encoding="utf-8")
             (directory / "spoken.json").write_text("{}", encoding="utf-8")
+            (directory / "player_state.json").write_text("{}", encoding="utf-8")
             exporter = ConversationExporter(directory)
             exporter.write_npc_state(time_state(0, "night", 0.0), [npc_state_entry(0, (0, 0), (0.0, 1.0))])
             exporter.point_at(exporter.start([npc_participant(MARA)]), ["Mara"])
             exporter.clear()
-            self.assertEqual(sorted(entry.name for entry in directory.iterdir()), ["bounds.json", "spoken.json"])
+            self.assertEqual(
+                sorted(entry.name for entry in directory.iterdir()),
+                ["bounds.json", "player_state.json", "spoken.json"],
+            )
+
+
+def _player_state(directory: Path, x: float, z: float, rot: float = 0.0, age: float = 0.0) -> None:
+    """player_state.json as the renderer writes it, `age` seconds old."""
+    path = directory / "player_state.json"
+    path.write_text(json.dumps({"x": x, "z": z, "rot": rot}), encoding="utf-8")
+    stamp = time.time() - age
+    os.utime(path, (stamp, stamp))
+
+
+class PlayerStateTests(unittest.TestCase):
+    """player_state.json, the renderer's half of the position contract:
+    where the person in the 3D scene is, coming back as minimap coordinates.
+    """
+
+    def test_it_undoes_npc_state_entry(self):
+        for position, facing in (((-100, 100), (0.0, 1.0)), ((0, 50), (3.0, 0.0)), ((42, -17), (-2.0, -5.0))):
+            entry = npc_state_entry(0, position, facing)
+            placed, angle = player_from_renderer(entry)
+            self.assertAlmostEqual(placed[0], position[0], places=1)
+            self.assertAlmostEqual(placed[1], position[1], places=1)
+            # The same direction the entry faced, as an angle from +x.
+            self.assertAlmostEqual(math.cos(angle), facing[0] / math.hypot(*facing), places=2)
+            self.assertAlmostEqual(math.sin(angle), facing[1] / math.hypot(*facing), places=2)
+
+    def test_a_position_off_the_map_is_clamped_to_its_edge(self):
+        self.assertEqual(player_from_renderer({"x": 2.0, "z": -1.0})[0], (100.0, -100.0))
+
+    def test_nothing_comes_of_a_file_that_is_not_the_contract(self):
+        for entry in ({}, {"x": 0.5}, {"x": "left", "z": 0.5}, {"x": 0.5, "z": float("nan")}, [], None):
+            self.assertIsNone(player_from_renderer(entry))
+
+    def test_read_ignores_a_missing_or_stale_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            exporter = ConversationExporter(directory)
+            self.assertIsNone(exporter.read_player_state())  # renderer not running
+            _player_state(directory, 0.75, 0.25, age=5.0)
+            self.assertIsNone(exporter.read_player_state())  # renderer stopped
+            _player_state(directory, 0.75, 0.25)
+            self.assertEqual(exporter.read_player_state()[0], (50.0, -50.0))
 
 
 class SanitizeTests(unittest.TestCase):

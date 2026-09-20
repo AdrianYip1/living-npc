@@ -35,6 +35,25 @@ namespace {
 		return g == "male" ? VOICE_MALE : VOICE_FEMALE;
 	}
 
+	// The player's position, going the other way from npc_state.json: the
+	// camera's spot in the scene, normalized 0..1 across the world bounds,
+	// and its facing about the up axis -- exactly the terms the sim sends
+	// NPC bodies in, so it can turn them straight back into 2D minimap
+	// coordinates. Written every poll even standing still: the file's age
+	// is how the sim knows this program is still running.
+	void writePlayerState(const HTN::WorldBounds& bounds, const enginemath::Vec3& pos,
+						  const enginemath::Vec3& forward) {
+		std::string dir = CONVO_LOG_DIR;
+		std::ofstream out(dir + "/player_state.json.tmp", std::ios::trunc);
+		if (!out) return;
+		out << "{\"x\": " << bounds.toNormX(pos.x)
+			<< ", \"z\": " << bounds.toNormZ(pos.z)
+			<< ", \"rot\": " << std::atan2(forward.x, forward.z) << "}";
+		out.close();
+		std::error_code ec;
+		std::filesystem::rename(dir + "/player_state.json.tmp", dir + "/player_state.json", ec);
+	}
+
 	void writeSpokenAck(const std::string& conversation, int seq) {
 		std::string dir = CONVO_LOG_DIR;
 		std::ofstream out(dir + "/spoken.json.tmp", std::ios::trunc);
@@ -210,6 +229,7 @@ int main() {
 				}
 
 				writeSpokenAck(ackConversation, ackSeq);
+				writePlayerState(bounds, camera.getPos(), camera.getFlatForward());
 
 				std::ifstream npcIn(npcStatePath);
 				if (npcIn) {

@@ -95,32 +95,35 @@ class AnthropicLLMClient:
         raise RuntimeError("Anthropic response had no tool_use block despite tool_choice='any'")
 
 
-class DeepSeekLLMClient:
-    """Real backend for DeepSeek's OpenAI-compatible API. `deepseek-chat` and
-    `deepseek-reasoner` are retired -- DeepSeek now ships a V4 model family
-    selected directly by id. `deepseek-flash` (V4.1-Flash, their current
-    default recommendation) is the default here; pass model="deepseek-v4-pro"
-    for the other current tier if agentic/tool-use reliability matters more
-    than latency for a given NPC. Check DeepSeek's docs if this drifts again.
-    tool_choice is forced to "required" for the same reason as Anthropic's
-    tool_choice="any" above.
+class _OpenAICompatibleLLMClient:
+    """Shared Chat Completions logic for OpenAI and OpenAI-compatible APIs
+    (DeepSeek). tool_choice is forced to "required" for the same reason as
+    Anthropic's tool_choice="any" above. Subclasses set the key env var,
+    base_url, and how the output-token cap is passed.
     """
 
-    def __init__(self, *, model: str = "deepseek-flash", api_key: str | None = None) -> None:
+    _KEY_ENV: str
+    _BASE_URL: str | None = None
+    _PROVIDER: str
+
+    def __init__(self, *, model: str, api_key: str | None = None) -> None:
         import os
 
         import openai
 
-        # The openai SDK defaults to reading OPENAI_API_KEY, which is the
-        # wrong env var for a DeepSeek key -- read ours explicitly instead.
-        self._client = openai.OpenAI(
-            api_key=api_key or os.environ.get("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com"
-        )
+        # Read our own env var explicitly -- the openai SDK would otherwise
+        # fall back to OPENAI_API_KEY, which is wrong for DeepSeek.
+        self._client = openai.OpenAI(api_key=api_key or os.environ.get(self._KEY_ENV), base_url=self._BASE_URL)
         self._model = model
+
+    def _request_options(self) -> dict[str, Any]:
+        return {"max_tokens": 512}
 
     def complete(
         self, *, system: str, messages: list[dict[str, str]], tools: list[dict[str, Any]]
     ) -> LLMResult:
+        import json
+
         openai_tools = [
             {
                 "type": "function",
@@ -130,15 +133,49 @@ class DeepSeekLLMClient:
         ]
         response = self._client.chat.completions.create(
             model=self._model,
-            max_tokens=512,
             messages=[{"role": "system", "content": system}, *messages],
             tools=openai_tools,
             tool_choice="required",
+            **self._request_options(),
         )
         message = response.choices[0].message
         if not message.tool_calls:
-            raise RuntimeError("DeepSeek response had no tool call despite tool_choice='required'")
-        import json
-
+            raise RuntimeError(f"{self._PROVIDER} response had no tool call despite tool_choice='required'")
         call = message.tool_calls[0]
         return LLMResult(tool_call=ToolCall(name=call.function.name, arguments=json.loads(call.function.arguments)))
+
+
+class DeepSeekLLMClient(_OpenAICompatibleLLMClient):
+    """DeepSeek's OpenAI-compatible API. `deepseek-chat` and
+    `deepseek-reasoner` are retired -- DeepSeek now ships a V4 model family
+    selected directly by id. `deepseek-flash` (V4.1-Flash, their current
+    default recommendation) is the default here; pass model="deepseek-v4-pro"
+    for the other current tier if agentic/tool-use reliability matters more
+    than latency for a given NPC. Check DeepSeek's docs if this drifts again.
+    """
+
+    _KEY_ENV = "DEEPSEEK_API_KEY"
+    _BASE_URL = "https://api.deepseek.com"
+    _PROVIDER = "DeepSeek"
+
+    def __init__(self, *, model: str = "deepseek-flash", api_key: str | None = None) -> None:
+        super().__init__(model=model, api_key=api_key)
+
+
+class OpenAILLMClient(_OpenAICompatibleLLMClient):
+    """OpenAI's API. gpt-5.6-terra is the mid tier, closest to Sonnet 5 in
+    price and positioning; gpt-5.6-luna is the ~10x cheaper budget tier.
+    """
+
+    _KEY_ENV = "OPENAI_API_KEY"
+    _PROVIDER = "OpenAI"
+
+    def __init__(self, *, model: str = "gpt-5.6-terra", api_key: str | None = None) -> None:
+        super().__init__(model=model, api_key=api_key)
+
+    def _request_options(self) -> dict[str, Any]:
+        # Current OpenAI models reject max_tokens. Chat Completions also
+        # refuses function tools alongside reasoning on gpt-5.6, so turn
+        # reasoning off -- on par with the Anthropic backend, which doesn't
+        # use extended thinking either.
+        return {"max_completion_tokens": 512, "reasoning_effort": "none"}

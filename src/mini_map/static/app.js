@@ -1,7 +1,8 @@
-// The scrolling grid and player dot are still a local placeholder -- WASD/
-// arrow keys drive the player directly, and will be replaced once a real
-// player position comes from the backend. The conversation log's
-// typing/rendering is likewise still local-only.
+// WASD/arrow keys drive the player dot directly -- except while the 3D
+// renderer is running, when the player's real position comes back from it
+// through the server (state()'s `player`, see Simulation.
+// apply_renderer_player) and the keys stand down. The conversation log's
+// typing/rendering is still local-only.
 //
 // NPCs, though, are real: their positions come from polling /api/state on
 // the mini_map server, which runs game_agents' NPCRegistry behind an
@@ -230,6 +231,34 @@ function applyState(data) {
   logTravelerArrivals(data.traveler_arrivals || []);
   receiveSpeech(data.speech || []);
   receiveInvite(data.player_invite || null);
+  receiveRendererPlayer(data.player || null);
+}
+
+// Where the 3D renderer has the player, in canvas world units, while it's
+// the one driving (the server only sends `player` then -- see Simulation.
+// _renderer_player). It lands about 4x a second, so the dot eases toward
+// it instead of snapping. The moment it stops coming the keys take back
+// over from wherever the dot ended up, so leaving the 3D app and carrying
+// on with WASD is seamless.
+let rendererPlayer = null;
+let rendererPlayerAt = 0;
+const RENDERER_PLAYER_TIMEOUT_MS = 1000;
+const RENDERER_PLAYER_EASE = 12; // per sec
+
+function receiveRendererPlayer(player) {
+  if (!player || typeof player.x !== "number" || typeof player.y !== "number") {
+    return;
+  }
+  rendererPlayer = {
+    x: player.x * WORLD_SCALE,
+    y: player.y * WORLD_SCALE,
+    facing: typeof player.facing === "number" ? player.facing : null,
+  };
+  rendererPlayerAt = performance.now();
+}
+
+function rendererDrivesPlayer(now) {
+  return rendererPlayer !== null && now - rendererPlayerAt < RENDERER_PLAYER_TIMEOUT_MS;
 }
 
 // An NPC-started conversation with the player (see Simulation.
@@ -840,7 +869,23 @@ function tick(now) {
   const dt = (now - lastFrameTime) / 1000;
   lastFrameTime = now;
 
-  if (!state.paused) {
+  const rendererDriving = rendererDrivesPlayer(now);
+  if (rendererDriving) {
+    // The person in the 3D scene is the player: ease the dot toward where
+    // the renderer has them and take its facing for the arrow. Runs even
+    // while paused -- pausing stops the autonomous world, not someone
+    // walking around the 3D scene.
+    const blend = 1 - Math.exp(-RENDERER_PLAYER_EASE * dt);
+    camera.x += (rendererPlayer.x - camera.x) * blend;
+    camera.y += (rendererPlayer.y - camera.y) * blend;
+    velocity.x = 0;
+    velocity.y = 0;
+    if (rendererPlayer.facing !== null) {
+      facingAngle = rendererPlayer.facing;
+    }
+  }
+
+  if (!state.paused && !rendererDriving) {
     let dx = 0;
     let dy = 0;
     for (const key of pressedKeys) {
@@ -893,6 +938,9 @@ function tick(now) {
       velocity.y = 0;
     }
 
+  }
+
+  if (!state.paused) {
     updateNpcs(dt);
     bubbleClock += dt;
   }
