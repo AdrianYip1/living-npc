@@ -3,11 +3,15 @@ Download the resources from the [latest release](https://github.com/AdrianYip1/l
 
 ## Living NPCs
 
+[![Demo Video](https://img.youtube.com/vi/ekAkxhsfbZo/maxresdefault.jpg)](https://www.youtube.com/watch?v=ekAkxhsfbZo)
+
 In most games, a key pillar of immersion and realism comes from the NPCs: non-player characters. How they act, what they say are all tools that a developer can use. However, there are only so many dialogue options, side quests, and reactions you can hard-code in. Inevitably, there are situations that it can't account for: the NPC fails to act or react in a appropriate manner, and the illusion for the player breaks.
 
 For NPCs to feel **real**, they need to be able to handle all types of situations: be adaptable, have their own personalities, and their own memory too. There are two parts to this project that when combined, improves believability: Game Agents will make sure the NPCs talk and act real, and 3D Rendering and Facial Animations will make sure they look and feel real. 
 
 ## Part I - Game Agents
+
+![Game Agents](screenshots/game_agents.png)
 
 An NPC that remembers your last conversation and acts on its own changes the feel of a game more than any amount of hand written dialogue. Effectively, we have created an sandbox game environment, where every NPC has is represented by an AI agent that has the ability to perceive, speak, and act.
 
@@ -17,13 +21,17 @@ The biggest challenge we had, which is a fairly common one for projects that rel
 
 ## Part II - 3D Rendering and Animations
 
+![3D Scene](screenshots/3d_scene.png)
+
 Game developers can't code every dialogue and action, and actors can't record every single possible line either. Therefore, we came up with a plan to deliver consistent and realistic facial animations, gestures, and voices to 3D models to accompany their backend logic.
 
 The face and lips of the NPCs are procedurally animated and lip synced to the resulting output audio provided by Azure AI. We took inspiration from JALI and S3, graphics programming research groups and papers, to derive a way to animate the lips and faces of the NPC models procedurally using visemes, which Azure AI provided us with. JALI makes use of many rules and observations of viseme IDs, classifications on mouth shapes when speaking, such as lips being required to touch during a bilabial for realistic animations. Additionally, S3 describes how the eyes move and cascade during speech, where we created a state machine consisting of a "GAZE" and "FOCUS" state, each with differing probabilities of cascading, averting, and blinking eyes.
 
 These animations are run and visualized via a custom Vulkan API rendering engine, which uses the standard rendering pipeline on top of a custom glTF model loader. Using the model loader, we created a 3D scene using blender to be copied into Vulkan buffer objects. This engine gives the abilities for movement using a camera class, where we handled ground collisions with the Möller-Trumbore intersection algorithm. Additional graphics techniques were added to increase the realism of the rendered scenes, most notably a day/night skybox cycle, diffuse lighting, and shadow mapping.
 
-## Part II - Connecting The Game Agents in 3D
+## Part III - Connecting The Game Agents in 3D
+
+![Connecting in 3D](screenshots/connecting.png)
 
 The logic and ground truths of the 3D engine rely on the sandbox game environment mentioned in Part I. As NPCs are agentic in nature, their movements and actions are driven in this sandbox and reflected onto the Vulkan renderer. Talking to an NPC in the 3D world will drive a response from the sandbox, where Azure AI will then output the audio of this response and pass it to our procedural animation calculations in 3D.
 
