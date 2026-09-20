@@ -25,6 +25,13 @@ layout(std430, set = 0, binding = 4) readonly buffer PaletteBuffer {
     mat4 palette[];
 };
 
+layout(binding = 1) uniform LightUBO {
+    vec3 pos;
+    vec3 dir;
+    vec3 color;
+    mat4 lightViewProj;
+} light;
+
 layout(std430, set = 0, binding = 6) readonly buffer InstanceBuffer {
     mat4 instances[];
 } instanceBuffer;
@@ -45,14 +52,6 @@ layout(push_constant) uniform MorphPush {
     uint instanceOffset;
 } PushConstants;
 
-layout(location = 0) out vec3 fragColor;
-layout(location = 1) out vec3 fragNormal;
-layout(location = 2) out vec2 fragTexCoord;
-layout(location = 3) out vec3 fragBaseColor;
-layout(location = 4) flat out uint fragUseTexture;
-layout(location = 5) out float fragDist;
-layout(location = 6) out vec3 fragWorldPos;
-
 void main() {
     vec3 pos = inPosition;
 
@@ -65,8 +64,6 @@ void main() {
         pos += w * morph.deltas[index].xyz;
     }
 
-    vec3 normal = inNormal;
-
     if (PushConstants.isSkinned == 1u) {
         uint jb = PushConstants.jointBase;
         mat4 skin = inWeights.x * palette[jb + inJoints.x]
@@ -74,7 +71,6 @@ void main() {
                   + inWeights.z * palette[jb + inJoints.z]
                   + inWeights.w * palette[jb + inJoints.w];
         pos = vec3(skin * vec4(pos, 1.0));
-        normal = mat3(skin) * inNormal;
     }
 
     mat4 worldMat = PushConstants.model;
@@ -83,13 +79,5 @@ void main() {
     }
 
     vec4 worldPos = worldMat * vec4(pos, 1.0);
-    gl_Position = ubo.proj * ubo.view * worldPos;
-    fragColor = inColor;
-    fragNormal = mat3(worldMat) * normal;
-    fragTexCoord = inTexCoord;
-    fragBaseColor = PushConstants.baseColor.rgb;
-    fragUseTexture = PushConstants.useTexture;
-    fragWorldPos = worldPos.xyz;
-    vec4 viewPos = ubo.view * worldPos;
-    fragDist = length(viewPos.xyz);
+    gl_Position = light.lightViewProj * worldPos;
 }

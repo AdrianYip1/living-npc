@@ -11,6 +11,7 @@ namespace HTN {
 		int slot = -1;
 		std::string text;
 		std::string gender;
+		std::string speakerName;
 		int seq = -1;
 		std::string conversation;
 	};

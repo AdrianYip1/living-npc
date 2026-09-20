@@ -4,8 +4,32 @@
 #include <cmath>
 #include <algorithm>
 
+HTN::DecodedImage& HTN::DecodedImage::operator=(DecodedImage&& o) noexcept {
+	if (pixels) stbi_image_free(pixels);
+	pixels = o.pixels; width = o.width; height = o.height;
+	o.pixels = nullptr;
+	return *this;
+}
+
+HTN::DecodedImage::~DecodedImage() {
+	if (pixels) stbi_image_free(pixels);
+}
+
+HTN::DecodedImage HTN::DecodedImage::fromFile(const std::string& filepath) {
+	DecodedImage img;
+	int channels;
+	img.pixels = stbi_load(filepath.c_str(), &img.width, &img.height, &channels, STBI_rgb_alpha);
+	return img;
+}
+
 HTN::Texture::Texture(Device& _device, const std::string& filepath) : device(_device) {
 	createTextureImage(filepath);
+	createTextureImageView();
+	createTextureSampler();
+}
+
+HTN::Texture::Texture(Device& _device, DecodedImage&& decoded) : device(_device) {
+	uploadTextureImage(std::move(decoded));
 	createTextureImageView();
 	createTextureSampler();
 }
@@ -18,13 +42,16 @@ HTN::Texture::~Texture() {
 }
 
 void HTN::Texture::createTextureImage(const std::string& filepath) {
-	int texWidth, texHeight, texChannels;
-	stbi_uc* pixels = stbi_load(filepath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-	VkDeviceSize imageSize = static_cast<VkDeviceSize>(texWidth) * texHeight * 4;
-
-	if (!pixels) {
+	DecodedImage decoded = DecodedImage::fromFile(filepath);
+	if (!decoded)
 		throw std::runtime_error("ERROR: Failed to load texture image: " + filepath);
-	}
+	uploadTextureImage(std::move(decoded));
+}
+
+void HTN::Texture::uploadTextureImage(DecodedImage&& decoded) {
+	int texWidth = decoded.width;
+	int texHeight = decoded.height;
+	VkDeviceSize imageSize = static_cast<VkDeviceSize>(texWidth) * texHeight * 4;
 
 	VkBuffer stagingBuffer;
 	VkDeviceMemory stagingBufferMemory;
@@ -34,12 +61,12 @@ void HTN::Texture::createTextureImage(const std::string& filepath) {
 
 	void* data;
 	vkMapMemory(device.getDevice(), stagingBufferMemory, 0, imageSize, 0, &data);
-	memcpy(data, pixels, static_cast<size_t>(imageSize));
+	memcpy(data, decoded.pixels, static_cast<size_t>(imageSize));
 	vkUnmapMemory(device.getDevice(), stagingBufferMemory);
 
-	stbi_image_free(pixels);
+	decoded = DecodedImage{};
 
-	mipLevels = static_cast<u32>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
+	mipLevels = static_cast<u32>(std::floor(std::log2((std::max)(texWidth, texHeight)))) + 1;
 
 	Image::createImage(device, static_cast<u32>(texWidth), static_cast<u32>(texHeight), mipLevels,
 					   VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,

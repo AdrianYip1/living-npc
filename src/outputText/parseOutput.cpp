@@ -96,6 +96,7 @@ HTN::SpokenLine HTN::outputParser::getOutputText() {
 		turnIndex = obj.value("seq", -1) + 1;
 		SpokenLine line;
 		line.slot = slot;
+		line.speakerName = speaker;
 		line.text = obj.value("text", "");
 		line.gender = obj.value("gender", "");
 		line.seq = obj.value("seq", -1);
