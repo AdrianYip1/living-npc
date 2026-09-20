@@ -10,7 +10,11 @@ namespace HTN {
 
 	inline const std::vector<NPCConfig> NPC_LIST = {
 		{ 0.0f },
-		{ 1.5f }
+		{ 1.5f },
+		{ 0.5f },
+		{ 1.0f },
+		{ 2.0f },
+		{ 2.5f }
 	};
 
 	inline u32 npcCount() { return static_cast<u32>(NPC_LIST.size()); }

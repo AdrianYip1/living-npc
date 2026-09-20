@@ -41,7 +41,7 @@ PORT = 8765
 # 1 game-minute per real second, i.e. a full in-game day in 24 real minutes
 # -- matches the pace from before the clock became smooth (which was 15
 # game-minutes every 15s: the same 1-minute-per-second rate, just chunkier).
-TICKS_PER_REAL_MINUTE = 60.0
+TICKS_PER_REAL_MINUTE = 240.0
 # 4 calls/game-hr x 1 game-hr/real-min (at the default tick rate above) = 4
 # calls/real-min, i.e. one query round every 15s -- matches the old default.
 LLM_CALLS_PER_GAME_HOUR = 4.0
