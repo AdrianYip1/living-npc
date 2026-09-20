@@ -143,6 +143,7 @@ int main() {
 		std::string ackConversation;
 		int ackSeq = -1;
 		std::map<int, std::string> slotConversation;
+		std::map<int, std::pair<std::string, int>> pendingAck;
 
 		std::vector<float> prevNpcX(renderer.faceCount(), -9999.0f);
 		std::vector<float> prevNpcZ(renderer.faceCount(), -9999.0f);
@@ -284,6 +285,7 @@ int main() {
 				if (!npcActive[s]) {
 					renderer.setNPCTransform(s,
 						enginemath::Mat4::translationM(0.0f, -1000.0f, 0.0f));
+					renderer.getFace(s).setVolume(0.0f);
 					prevNpcX[s] = -9999.0f;
 					continue;
 				}
@@ -325,6 +327,13 @@ int main() {
 
 			for (auto it = slotConversation.begin(); it != slotConversation.end();) {
 				if (!renderer.getFace(it->first).isBusy()) {
+					auto ackIt = pendingAck.find(it->first);
+					if (ackIt != pendingAck.end()) {
+						ackConversation = ackIt->second.first;
+						ackSeq = ackIt->second.second;
+						writeSpokenAck(ackConversation, ackSeq);
+						pendingAck.erase(ackIt);
+					}
 					it = slotConversation.erase(it);
 				} else {
 					++it;
@@ -351,9 +360,7 @@ int main() {
 						renderer.getFace(slot).startSpeaking(next.text);
 						slotConversation[slot] = next.conversation;
 						busyConvos.insert(next.conversation);
-						ackConversation = next.conversation;
-						ackSeq = next.seq;
-						writeSpokenAck(ackConversation, ackSeq);
+						pendingAck[slot] = {next.conversation, next.seq};
 					} else if (slot >= 0) {
 						retry.push(next);
 					}
