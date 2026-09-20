@@ -1109,7 +1109,9 @@ class Simulation:
         if agent is None:
             return False
         with self._player_lock:
-            if self._player_partner not in (None, name) or not self._registry.try_occupy(name):
+            if self._player_partner == name:
+                return True
+            if self._player_partner is not None or not self._registry.try_occupy(name):
                 return False
             self._player_partner = name
             self._begin_player_log(f"player_{name}")
@@ -1294,6 +1296,9 @@ class Simulation:
         agent = self._registry.get(name)
         if agent is None:
             return None
+        with self._player_lock:
+            if self._player_invite is not None and self._player_invite["name"] == name:
+                self._player_invite = None
         who = f"{agent.player_name} (the player)" if agent.player_name else "The player"
         self._log_player_turn(
             name, ConversationTurn(speaker=PLAYER_ID, listener=name, stimulus="", utterance=text, action=None)
