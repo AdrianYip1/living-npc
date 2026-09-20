@@ -217,15 +217,10 @@ int main() {
 			}
 
 			if (pollClock.elapsedMs() >= 250) {
-				HTN::SpokenLine line = outputText.getOutputText();
-
-				if (outputText.startedNewConversation()) {
-					std::queue<HTN::SpokenLine> empty;
-					std::swap(speechQueue, empty);
-				}
-
-				if (line.slot >= 0 && !line.text.empty()) {
-					speechQueue.push(line);
+				std::vector<HTN::SpokenLine> allLines = outputText.getAllOutputText();
+				for (const auto& line : allLines) {
+					if (line.slot >= 0 && !line.text.empty())
+						speechQueue.push(line);
 				}
 
 				writeSpokenAck(ackConversation, ackSeq);
@@ -251,9 +246,11 @@ int main() {
 								HTN::f32 wz = bounds.toWorldZ(nz);
 								npcTargetRot[slot] = npc.value("rot", 0.0f);
 
-								npcNames[slot] = npc.value("name", "");
+								std::string name = npc.value("name", "");
+								bool newNpc = prevNpcX[slot] < -9000.0f || name != npcNames[slot];
+								npcNames[slot] = name;
 								npcTargetPositions[slot] = {wx, 0.0f, wz};
-								if (prevNpcX[slot] < -9000.0f)
+								if (newNpc)
 									npcWorldPositions[slot] = npcTargetPositions[slot];
 
 								float dx = nx - prevNpcX[slot];
@@ -328,20 +325,26 @@ int main() {
 				writeSpokenAck(ackConversation, ackSeq);
 			}
 
-			if (!renderer.anyBusy() && !speechQueue.empty()) {
-				HTN::SpokenLine next = speechQueue.front();
-				speechQueue.pop();
-				int slot = -1;
-				for (HTN::u32 i = 0; i < renderer.faceCount(); i++) {
-					if (npcNames[i] == next.speakerName) { slot = (int)i; break; }
+			{
+				std::queue<HTN::SpokenLine> retry;
+				while (!speechQueue.empty()) {
+					HTN::SpokenLine next = speechQueue.front();
+					speechQueue.pop();
+					int slot = -1;
+					for (HTN::u32 i = 0; i < renderer.faceCount(); i++) {
+						if (npcNames[i] == next.speakerName) { slot = (int)i; break; }
+					}
+					if (slot >= 0 && !renderer.getFace(slot).isBusy()) {
+						renderer.getFace(slot).setVoice(voiceForGender(next.gender));
+						renderer.getFace(slot).startSpeaking(next.text);
+						inFlight = true;
+						inFlightConversation = next.conversation;
+						inFlightSeq = next.seq;
+					} else if (slot >= 0) {
+						retry.push(next);
+					}
 				}
-				if (slot >= 0) {
-					renderer.getFace(slot).setVoice(voiceForGender(next.gender));
-					renderer.getFace(slot).startSpeaking(next.text);
-				}
-				inFlight = true;
-				inFlightConversation = next.conversation;
-				inFlightSeq = next.seq;
+				std::swap(speechQueue, retry);
 			}
 
 			window.pollWindowEvents();
