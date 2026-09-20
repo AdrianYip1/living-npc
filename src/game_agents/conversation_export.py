@@ -59,6 +59,16 @@ atan2(vx, vy) of the last movement. PLACEHOLDER: which NPC gets which slot
 (residents first, in registry order, then travelers) and the axis/facing
 conventions are unsettled with the renderer side.
 
+player_state.json is npc_state.json's mirror, written by the renderer:
+{"x", "z", "rot"} -- the same shape as one of its "npcs" entries without
+the slot. Where the person walking around the 3D scene is, normalized
+0..1 across the renderer's own bounds, and their facing about the up axis.
+It's rewritten every ~250 ms even when nothing moved, so like spoken.json
+its age doubles as a heartbeat. read_player_state() turns a fresh one back
+into minimap coordinates: that is how the 3D scene moves the player's dot
+on the 2D map, and while it keeps coming the page's own reported position
+is ignored (see mini_map.Simulation.set_player_position).
+
 The renderer also writes bounds.json once at its startup ({"minX", "maxX",
 "minZ", "maxZ"}, its scene's footprint in world units). Nothing here reads
 it yet, but clear() leaves it -- and spoken.json -- alone: they belong to
@@ -81,12 +91,15 @@ from .world import MAP_MAX, MAP_MIN
 ACTIVE_POINTER = "active.json"
 SPOKEN_ACK = "spoken.json"
 NPC_STATE = "npc_state.json"
+PLAYER_STATE = "player_state.json"
 RENDERER_BOUNDS = "bounds.json"
 # Written by the renderer, not us -- clear() must leave these be.
-RENDERER_OWNED = frozenset({SPOKEN_ACK, RENDERER_BOUNDS})
+RENDERER_OWNED = frozenset({SPOKEN_ACK, RENDERER_BOUNDS, PLAYER_STATE})
 # How old spoken.json may be before the speech side counts as not running
-# -- it rewrites the file about every 250 ms.
+# -- it rewrites the file about every 250 ms. player_state.json comes on
+# the same beat, so it gets the same allowance.
 SPEECH_SIDE_STALE_SECONDS = 2.0
+RENDERER_SIDE_STALE_SECONDS = 2.0
 PLAYER_ID = "player"
 PLAYER_PARTICIPANT = {"type": "player", "id": PLAYER_ID, "name": "Player"}
 _MINUTES_PER_DAY = 24 * 60
@@ -141,6 +154,34 @@ def npc_state_entry(slot: int, position: tuple[float, float], facing: tuple[floa
         "z": round(min(1.0, max(0.0, (position[1] - MAP_MIN) / span)), 4),
         "rot": round(math.atan2(facing[0], facing[1]), 3),
     }
+
+
+def player_from_renderer(entry: dict[str, Any]) -> tuple[tuple[float, float], float] | None:
+    """npc_state_entry() backwards, for the renderer's player_state.json:
+    its normalized {"x", "z"} back to a minimap position, and its "rot"
+    back to the minimap's own facing angle (0 = +x, turning toward +y).
+    None if the file isn't the shape the contract says -- caught
+    half-written, or a renderer sending something else.
+    """
+    if not isinstance(entry, dict):
+        return None
+    try:
+        nx = float(entry["x"])
+        nz = float(entry["z"])
+        rot = float(entry.get("rot", 0.0))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(map(math.isfinite, (nx, nz, rot))):
+        return None
+    span = MAP_MAX - MAP_MIN
+    position = (
+        MAP_MIN + min(1.0, max(0.0, nx)) * span,
+        MAP_MIN + min(1.0, max(0.0, nz)) * span,
+    )
+    # "rot" is atan2(vx, vy) of the movement (see npc_state_entry), so the
+    # direction it names is (sin rot, cos rot) -- and the minimap wants
+    # that as an angle from +x.
+    return position, math.atan2(math.cos(rot), math.sin(rot))
 
 
 def time_state(minute_of_day: int, phase: str, game_minutes_per_real_second: float) -> dict[str, Any]:
@@ -301,6 +342,23 @@ class ConversationExporter:
             return False
         acked = ack.get("seq")
         return ack.get("conversation") == name and isinstance(acked, int) and acked >= seq
+
+    def read_player_state(self) -> tuple[tuple[float, float], float] | None:
+        """Where the renderer has the player, as a minimap position and
+        facing (see player_from_renderer). None if the renderer isn't
+        running -- no player_state.json, or one too old to trust (it
+        rewrites it about every 250 ms even standing still) -- so the
+        caller can fall back to the position the page reports.
+        """
+        path = self.directory / PLAYER_STATE
+        try:
+            if time.time() - path.stat().st_mtime > RENDERER_SIDE_STALE_SECONDS:
+                return None
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # Missing, or caught mid-replace -- ask again next beat.
+            return None
+        return player_from_renderer(entry)
 
     def _replace(self, name: str, obj: Any) -> bool:
         """Writes a whole file via a temp file and rename, so the reader

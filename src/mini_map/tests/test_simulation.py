@@ -12,6 +12,7 @@ from unittest import mock
 
 from environment_agent.agent import EnvironmentAgent
 
+from game_agents.conversation_export import ConversationExporter
 from game_agents.identity import Identity
 from game_agents.llm import ENDS_CONVERSATION_FIELD, SPEAK_TOOL_NAME, LLMResult, MockLLMClient, ToolCall
 from game_agents.registry import NPCRegistry
@@ -597,6 +598,58 @@ class SimulationPlayerConversationTests(unittest.TestCase):
             sim = Simulation(registry, EnvironmentAgent(seed=1))
 
             self.assertIsNone(sim.say("Nobody", "hello"))
+
+
+class RendererPlayerTests(unittest.TestCase):
+    """The player's position coming back from the 3D renderer
+    (player_state.json) rather than from the page's keys.
+    """
+
+    def _sim(self, tmp: str) -> Simulation:
+        log = Path(tmp) / "log"
+        log.mkdir()
+        registry = _registry(tmp, MockLLMClient(), names=("Mara",))
+        return Simulation(registry, EnvironmentAgent(seed=1), exporter=ConversationExporter(log))
+
+    def _renderer_says(self, tmp: str, x: float, z: float) -> None:
+        (Path(tmp) / "log" / "player_state.json").write_text(
+            json.dumps({"x": x, "z": z, "rot": 0.0}), encoding="utf-8"
+        )
+
+    def test_the_renderer_places_the_player_on_the_map(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = self._sim(tmp)
+            self._renderer_says(tmp, 0.75, 0.25)
+
+            self.assertTrue(sim.apply_renderer_player())
+
+            # Where the NPCs see the player, so proximity still works.
+            self.assertEqual(sim._registry.player_position, (50.0, -50.0))
+            self.assertEqual(sim.state()["player"], {"x": 50.0, "y": -50.0, "facing": 1.5708})
+
+    def test_nothing_happens_while_the_renderer_is_not_running(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = self._sim(tmp)
+
+            self.assertFalse(sim.apply_renderer_player())
+            self.assertIsNone(sim.state()["player"])
+
+    def test_the_renderer_outranks_the_page_until_it_stops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = self._sim(tmp)
+            self._renderer_says(tmp, 0.75, 0.25)
+            sim.apply_renderer_player()
+
+            # The page keeps reporting its own dot -- ignored, or the two
+            # would fight over where the player is.
+            sim.set_player_position(10.0, 10.0)
+            self.assertEqual(sim._registry.player_position, (50.0, -50.0))
+
+            # Once the renderer quits, the keys take back over.
+            sim._renderer_player_at -= sim.RENDERER_PLAYER_HOLD_S
+            sim.set_player_position(10.0, 10.0)
+            self.assertEqual(sim._registry.player_position, (10.0, 10.0))
+            self.assertIsNone(sim.state()["player"])
 
 
 if __name__ == "__main__":
