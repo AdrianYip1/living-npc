@@ -905,7 +905,7 @@ class Simulation:
                 self._facing[name] = (dx, dy)
             elif math.hypot(*agent.velocity) > 1.0:
                 self._facing[name] = agent.velocity
-            entries.append(npc_state_entry(slot, agent.position, self._facing.get(name, (0.0, 1.0))))
+            entries.append(npc_state_entry(slot, agent.position, self._facing.get(name, (0.0, 1.0)), name=name))
         rate = 0.0 if self.is_paused() else self._game_minutes_per_real_minute() / 60.0
         time_now = time_state(self._environment.minute_of_day, self._environment.time_of_day.value, rate)
         self._exporter.write_npc_state(time_now, entries)
