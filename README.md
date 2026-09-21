@@ -1,5 +1,5 @@
 ## Build Instructions
-Download the resources from the [latest release](https://github.com/AdrianYip1/living-npc/releases/latest) and extract into the repo root so you have
+Download the resources from the [latest release](https://github.com/AdrianYip1/living-npc/releases/latest) and extract into the repo root.
 
 ## Living NPCs
 
